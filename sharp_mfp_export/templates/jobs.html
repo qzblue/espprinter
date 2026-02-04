@@ -1,119 +1,159 @@
 {% extends "base.html" %}
 
 {% block content %}
-  <section class="card">
-    <h1>列印 / 影印紀錄查詢</h1>
-    <p>輸入用戶關鍵字後，系統會在所有列印機中搜尋並列出該用戶的所有紀錄。</p>
-    <form method="get" class="form-grid">
-      <label>
-        <span>列印機</span>
-        <select name="printer">
-          <option value="all" {% if query.printer == "all" %}selected{% endif %}>全部</option>
-          {% for printer in printer_choices %}
-            <option value="{{ printer.value }}" {% if query.printer == printer.value %}selected{% endif %}>{{ printer.label }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <label>
-        <span>用戶 / 登入名稱</span>
-        <input type="text" name="user" value="{{ query.user }}" placeholder="例如 psi" />
-      </label>
-      <label>
-        <span>工作模式</span>
-        <input type="text" name="mode" value="{{ query.mode }}" placeholder="列印 / 影印" />
-      </label>
-      <label>
-        <span>電腦名稱</span>
-        <input type="text" name="computer" value="{{ query.computer }}" placeholder="例如 CLAB-PC01" />
-      </label>
-      <label>
-        <span>時間範圍模式</span>
-        <select name="time_mode" class="time-mode-select">
-          <option value="all" {% if query.time_mode == "all" %}selected{% endif %}>全部資料</option>
-          <option value="month" {% if query.time_mode == "month" %}selected{% endif %}>指定月份</option>
-          <option value="week" {% if query.time_mode == "week" %}selected{% endif %}>指定週</option>
-          <option value="custom" {% if query.time_mode == "custom" %}selected{% endif %}>自訂時間</option>
-        </select>
-      </label>
-      <label class="time-field" data-time-field="month">
-        <span>指定月份</span>
-        <input type="month" name="month" value="{{ query.month }}" />
-      </label>
-      <label class="time-field" data-time-field="week">
-        <span>指定週 (YYYY-Www)</span>
-        <input type="text" name="week" value="{{ query.week }}" placeholder="2026-W05" />
-      </label>
-      <label class="time-field" data-time-field="custom">
-        <span>開始時間</span>
-        <input type="datetime-local" name="start" value="{{ query.start }}" />
-      </label>
-      <label class="time-field" data-time-field="custom">
-        <span>結束時間</span>
-        <input type="datetime-local" name="end" value="{{ query.end }}" />
-      </label>
-      <label>
-        <span>每位用戶顯示筆數</span>
-        <input type="number" name="limit" value="{{ query.limit }}" />
-      </label>
-      <div style="grid-column: 1 / -1; display: flex; gap: 0.75rem">
-        <button type="submit">套用篩選</button>
-        <a class="btn" href="{{ url_for('export_jobs') }}{% if query_string %}?{{ query_string }}{% endif %}">導出 Excel</a>
-      </div>
-    </form>
-  </section>
+<section class="card">
+  <h1>列印 / 影印紀錄查詢</h1>
+  <p>輸入用戶關鍵字後，系統會在所有列印機中搜尋並列出該用戶的所有紀錄。</p>
+  <form method="get" class="form-grid">
+    <label>
+      <span>列印機</span>
+      <select name="printer">
+        <option value="all" {% if query.printer=="all" %}selected{% endif %}>全部</option>
+        {% for printer in printer_choices %}
+        <option value="{{ printer.value }}" {% if query.printer==printer.value %}selected{% endif %}>{{ printer.label }}
+        </option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      <span>用戶 / 登入名稱</span>
+      <input type="text" name="user" value="{{ query.user }}" placeholder="例如 psi" />
+    </label>
+    <label>
+      <span>工作模式</span>
+      <select name="mode">
+        <option value="" {% if not query.mode %}selected{% endif %}>全部</option>
+        <option value="列印" {% if query.mode=="列印" %}selected{% endif %}>列印</option>
+        <option value="影印" {% if query.mode=="影印" %}selected{% endif %}>影印</option>
+        <option value="掃描" {% if query.mode=="掃描" %}selected{% endif %}>掃描</option>
+      </select>
+    </label>
+    <label>
+      <span>電腦名稱</span>
+      <input type="text" name="computer" value="{{ query.computer }}" placeholder="例如 CLAB-PC01" />
+    </label>
+    <label>
+      <span>時間範圍模式</span>
+      <select name="time_mode" class="time-mode-select">
+        <option value="all" {% if query.time_mode=="all" %}selected{% endif %}>全部資料</option>
+        <option value="month" {% if query.time_mode=="month" %}selected{% endif %}>指定月份</option>
+        <option value="week" {% if query.time_mode=="week" %}selected{% endif %}>指定週</option>
+        <option value="custom" {% if query.time_mode=="custom" %}selected{% endif %}>自訂時間</option>
+      </select>
+    </label>
+    <label class="time-field" data-time-field="month">
+      <span>指定月份</span>
+      <input type="month" name="month" value="{{ query.month }}" />
+    </label>
+    <label class="time-field" data-time-field="week">
+      <span>指定週 (YYYY-Www)</span>
+      <input type="text" name="week" value="{{ query.week }}" placeholder="2026-W05" />
+    </label>
+    <label class="time-field" data-time-field="custom">
+      <span>開始時間</span>
+      <input type="datetime-local" name="start" value="{{ query.start }}" />
+    </label>
+    <label class="time-field" data-time-field="custom">
+      <span>結束時間</span>
+      <input type="datetime-local" name="end" value="{{ query.end }}" />
+    </label>
+    <label>
+      <span>每頁顯示用戶數</span>
+      <select name="per_page">
+        <option value="2" {% if query.per_page=="2" %}selected{% endif %}>2</option>
+        <option value="5" {% if query.per_page=="5" %}selected{% endif %}>5</option>
+        <option value="10" {% if query.per_page=="10" %}selected{% endif %}>10</option>
+        <option value="20" {% if query.per_page=="20" %}selected{% endif %}>20</option>
+        <option value="50" {% if query.per_page=="50" %}selected{% endif %}>50</option>
+        <option value="100" {% if query.per_page=="100" %}selected{% endif %}>100</option>
+      </select>
+    </label>
+    <label>
+      <span>每位用戶顯示筆數</span>
+      <input type="number" name="limit" value="{{ query.limit }}" />
+    </label>
+    <div style="grid-column: 1 / -1; display: flex; gap: 0.75rem">
+      <button type="submit">套用篩選</button>
+      <a class="btn" href="{{ url_for('export_jobs') }}{% if query_string %}?{{ query_string }}{% endif %}">導出 Excel</a>
+    </div>
+  </form>
+</section>
 
-  {% if errors %}
-    <section class="card error">
-      {% for err in errors %}
-        <div>{{ err }}</div>
-      {% endfor %}
-    </section>
-  {% endif %}
+{% if errors %}
+<section class="card error">
+  {% for err in errors %}
+  <div>{{ err }}</div>
+  {% endfor %}
+</section>
+{% endif %}
 
-  {% if results %}
-    {% for block in results %}
-      <section class="card">
-        <h2>{{ block.name }} {% if block.login and block.login != block.name %}<span class="tag">{{ block.login }}</span>{% endif %}</h2>
-        <p>共 {{ block.totals.jobs }} 筆，{{ block.totals.pages }} 張 (黑白 {{ block.totals.bw }} / 彩色 {{ block.totals.color }})。</p>
-        {% if block.printer_totals %}
-          <div style="margin-bottom: 1rem">
-            {% for pt in block.printer_totals %}
-              <span class="tag">{{ pt.label }}: {{ pt.jobs }} 筆 / {{ pt.pages }} 張</span>
-            {% endfor %}
-          </div>
-        {% endif %}
-        {% if block.entries %}
-          <table>
-            <thead>
-              <tr>
-                <th>列印機</th>
-                <th>時間 / 模式</th>
-                <th>電腦</th>
-                <th>張數</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for item in block.entries %}
-                <tr>
-                  <td>{{ item.printer }}</td>
-                  <td>
-                    <strong>{{ item.start }}</strong><br />
-                    {{ item.mode }}
-                  </td>
-                  <td>{{ item.computer }}</td>
-                  <td>{{ item.pages }}<br /><small>黑白 {{ item.bw }} / 彩色 {{ item.color }}</small></td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        {% else %}
-          <div class="error">沒有符合的紀錄。</div>
-        {% endif %}
-      </section>
+{% if results %}
+{% for block in results %}
+<section class="card">
+  <h2>{{ block.name }} {% if block.login and block.login != block.name %}<span class="tag">{{ block.login }}</span>{%
+    endif %}</h2>
+  <p>共 {{ block.totals.jobs }} 筆，{{ block.totals.pages }} 張 (黑白 {{ block.totals.bw }} / 彩色 {{ block.totals.color }})。
+  </p>
+  {% if block.printer_totals %}
+  <div style="margin-bottom: 1rem">
+    {% for pt in block.printer_totals %}
+    <span class="tag">{{ pt.label }}: {{ pt.jobs }} 筆 / {{ pt.pages }} 張</span>
     {% endfor %}
-  {% else %}
-    <section class="card">
-      <div class="error">查無符合的紀錄，請調整用戶關鍵字或時間範圍。</div>
-    </section>
+  </div>
   {% endif %}
+  {% if block.entries %}
+  <table>
+    <thead>
+      <tr>
+        <th>列印機</th>
+        <th>時間 / 模式</th>
+        <th>電腦</th>
+        <th>張數</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in block.entries %}
+      <tr>
+        <td>{{ item.printer }}</td>
+        <td>
+          <strong>{{ item.start }}</strong><br />
+          {{ item.mode }}
+        </td>
+        <td>{{ item.computer }}</td>
+        <td>{{ item.pages }}<br /><small>黑白 {{ item.bw }} / 彩色 {{ item.color }}</small></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="error">沒有符合的紀錄。</div>
+  {% endif %}
+</section>
+{% endfor %}
+
+{% if pagination and pagination.total_pages > 1 %}
+<div style="display: flex; justify-content: center; gap: 1rem; margin-top: 1rem; align-items: center;">
+  {% if pagination.has_prev %}
+  <a class="btn"
+    href="{{ url_for('jobs', page=pagination.prev_num, per_page=pagination.per_page, printer=query.printer, user=query.user, mode=query.mode, computer=query.computer, time_mode=query.time_mode, month=query.month, week=query.week, start=query.start, end=query.end) }}">上一頁</a>
+  {% else %}
+  <button class="btn" disabled style="background: #ccc; cursor: not-allowed">上一頁</button>
+  {% endif %}
+
+  <span>第 {{ pagination.page }} 頁 / 共 {{ pagination.total_pages }} 頁 ({{ pagination.total_users }} 位用戶)</span>
+
+  {% if pagination.has_next %}
+  <a class="btn"
+    href="{{ url_for('jobs', page=pagination.next_num, per_page=pagination.per_page, printer=query.printer, user=query.user, mode=query.mode, computer=query.computer, time_mode=query.time_mode, month=query.month, week=query.week, start=query.start, end=query.end) }}">下一頁</a>
+  {% else %}
+  <button class="btn" disabled style="background: #ccc; cursor: not-allowed">下一頁</button>
+  {% endif %}
+</div>
+{% endif %}
+
+{% else %}
+<section class="card">
+  <div class="error">查無符合的紀錄，請調整用戶關鍵字或時間範圍。</div>
+</section>
+{% endif %}
 {% endblock %}

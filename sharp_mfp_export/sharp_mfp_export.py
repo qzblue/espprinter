@@ -15,6 +15,9 @@ from urllib.parse import urlparse
 import requests
 
 
+import pymysql
+import pymysql.cursors
+
 # ========= 配置區（改這裡就好） =========
 # 優先讀取環境變數 SHARP_PRINTERS (逗號分隔)
 env_printers = os.getenv("SHARP_PRINTERS")
@@ -34,6 +37,430 @@ PRINTER_ALIASES = {
     "http://10.96.48.109": "中學3樓大教員室列印機",
     "http://10.32.48.155": "幼稚園教員室列印機"
 }
+
+# 數據庫配置
+DB_CONFIG = {
+    'host': os.getenv("DB_HOST", "10.32.65.22"),
+    'user': os.getenv("DB_USER", "printer"),
+    'password': os.getenv("DB_PASS", "HDtAHFahLsdkNazm"),
+    'database': os.getenv("DB_NAME", "printer"),
+    'charset': 'utf8mb4',
+    'cursorclass': pymysql.cursors.DictCursor,
+    'connect_timeout': 5,
+    'autocommit': True
+}
+# =====================================
+
+def get_db_connection():
+    return pymysql.connect(**DB_CONFIG)
+
+def init_db():
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            # unique key: printer + job_id + start_time
+            # start_time is critical to distinguish same job id recycled or from different days?
+            # job_id itself might repeat after 9999 or similar?
+            # User said "data has duplicates", "incremental logs".
+            # We trust that (printer, job_id, start_time) is unique enough.
+            # If Job ID is strictly unique per printer forever, (printer, job_id) is enough.
+            # But safer to include time.
+            sql = """
+            CREATE TABLE IF NOT EXISTS job_logs (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                printer_addr VARCHAR(100) NOT NULL,
+                job_id VARCHAR(50),
+                account_job_id VARCHAR(50),
+                mode VARCHAR(50),
+                user_name VARCHAR(100),
+                login_name VARCHAR(100),
+                computer_name VARCHAR(100),
+                start_time DATETIME,
+                end_time DATETIME,
+                bw_pages INT DEFAULT 0,
+                color_pages INT DEFAULT 0,
+                total_pages INT DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY unique_job (printer_addr, job_id, start_time) 
+            );
+            """
+            cursor.execute(sql)
+
+            # User Count Table
+            sql_uc = """
+            CREATE TABLE IF NOT EXISTS user_counts (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                printer_addr VARCHAR(100) NOT NULL,
+                user_name VARCHAR(100),
+                print_bw INT DEFAULT 0,
+                print_color INT DEFAULT 0,
+                copy_bw INT DEFAULT 0,
+                copy_color INT DEFAULT 0,
+                other_usage INT DEFAULT 0,
+                total_pages INT DEFAULT 0,
+                snapshot_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_printer_latest (printer_addr, snapshot_time)
+            );
+            """
+            cursor.execute(sql_uc)
+    finally:
+        conn.close()
+
+def sync_csv_to_db(path: Path, printer_addr: str) -> int:
+    """Read CSV path, parse it, and upsert into DB."""
+    entries = _joblog_entries_from_csv_raw(path)
+    if not entries:
+        return 0
+
+    conn = get_db_connection()
+    inserted = 0
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+            INSERT IGNORE INTO job_logs (
+                printer_addr, job_id, account_job_id, mode, 
+                user_name, login_name, computer_name, 
+                start_time, end_time, bw_pages, color_pages, total_pages
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            
+            # Prepare batch
+            values = []
+            for e in entries:
+                if not e.get("start"):
+                    continue
+
+                values.append((
+                    printer_addr,
+                    e.get("job_id"),
+                    e.get("account_job_id"),
+                    e.get("mode"),
+                    e.get("user"),
+                    e.get("login"),
+                    e.get("computer"),
+                    e.get("start"),
+                    e.get("end"),
+                    e.get("bw", 0),
+                    e.get("color", 0),
+                    e.get("pages", 0)
+                ))
+            
+            if values:
+                inserted = cursor.executemany(sql, values)
+    finally:
+        conn.close()
+    
+    return inserted
+
+
+def sync_usercount_to_db(path: Path, printer_addr: str) -> int:
+    """Parse usercount CSV and insert snapshot."""
+    rows = _read_csv_rows_raw(path)
+    if not rows:
+        return 0
+
+    conn = get_db_connection()
+    inserted = 0
+    
+    # Try to parse timestamp from filename: uc_TAG_TIMESTAMP.csv
+    # format: YYYYMMDD-HHMMSS
+    timestamp = datetime.now()
+    try:
+        ts_str = path.stem.split("_")[-1]
+        timestamp = datetime.strptime(ts_str, "%Y%m%d-%H%M%S")
+    except (ValueError, IndexError):
+        pass
+
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+            INSERT INTO user_counts (
+                printer_addr, user_name, 
+                print_bw, print_color, copy_bw, copy_color, other_usage, total_pages,
+                snapshot_time
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            
+            values = []
+            for row in rows:
+                user_name = normalize_name(row.get("用戶名稱"), "N/A")
+                usage = collect_usercount_usage(row)
+                
+                # Mapping keys from collect_usercount_usage (based on USAGE_CATEGORY_CONFIG labels mostly)
+                # But collect_usercount_usage uses raw part before "已使用"
+                # Ex: "印表機:黑白"
+                
+                print_bw = usage.get("印表機:黑白", 0)
+                print_color = usage.get("印表機:全彩", 0)
+                copy_bw = usage.get("影印:黑白", 0)
+                copy_color = usage.get("影印:全彩", 0)
+                
+                # Sum known categories to find 'other'
+                known_sum = print_bw + print_color + copy_bw + copy_color
+                total = sum(usage.values())
+                other = total - known_sum
+                
+                if total == 0:
+                    continue
+
+                values.append((
+                    printer_addr, user_name,
+                    print_bw, print_color, copy_bw, copy_color, other, total,
+                    timestamp
+                ))
+
+            if values:
+                inserted = cursor.executemany(sql, values)
+    finally:
+        conn.close()
+    return inserted
+
+
+def fetch_latest_user_counts(
+    printer_addr: str,
+    user_filter: Optional[str] = None,
+    show_zero: bool = False,
+    limit: int = 0,
+    offset: int = 0
+) -> Tuple[List[Dict[str, Any]], int]:
+    """
+    Fetch the latest snapshot for a printer.
+    Returns (results, total_count).
+    """
+    conn = get_db_connection()
+    results = []
+    total = 0
+    try:
+        with conn.cursor() as cursor:
+            # Subquery to find latest time for this printer
+            sql_base = """
+            FROM user_counts 
+            WHERE printer_addr = %s
+            AND snapshot_time = (
+                SELECT MAX(snapshot_time) FROM user_counts WHERE printer_addr = %s
+            )
+            """
+            params_base = [printer_addr, printer_addr]
+            
+            if user_filter:
+                sql_base += " AND user_name LIKE %s"
+                params_base.append(f"%{user_filter}%")
+                
+            if not show_zero:
+                sql_base += " AND total_pages > 0"
+
+            # Get total count
+            count_sql = f"SELECT COUNT(*) as cnt {sql_base}"
+            cursor.execute(count_sql, params_base)
+            total = cursor.fetchone()['cnt']
+            
+            if total == 0:
+                return [], 0
+                
+            # Get Data
+            sql = f"SELECT * {sql_base} ORDER BY total_pages DESC"
+            params = list(params_base)
+            
+            if limit > 0:
+                sql += " LIMIT %s OFFSET %s"
+                params.extend([limit, offset])
+            
+            cursor.execute(sql, params)
+            rows = cursor.fetchall()
+            
+            for r in rows:
+                # Reconstruct usage dict for webapp compatibility
+                # "usage_list" format: [{"label": "...", "pages": 123}, ...]
+                # USAGE_CATEGORY_CONFIG labels: "印表機:黑白" etc.
+                
+                usage_list = []
+                if r['print_bw'] > 0: usage_list.append({"label": "印表機:黑白", "pages": r['print_bw']})
+                if r['print_color'] > 0: usage_list.append({"label": "印表機:全彩", "pages": r['print_color']})
+                if r['copy_bw'] > 0: usage_list.append({"label": "影印:黑白", "pages": r['copy_bw']})
+                if r['copy_color'] > 0: usage_list.append({"label": "影印:全彩", "pages": r['copy_color']})
+                if r['other_usage'] > 0: usage_list.append({"label": "其他", "pages": r['other_usage']})
+
+                # Need "usage": {"印表機:黑白": 123} map too?
+                # webapp uses `usage_list` for display and `usage` dict for sorting/export sometimes.
+                # Let's provide both.
+                usage_dict = {item["label"]: item["pages"] for item in usage_list}
+                
+                results.append({
+                    "name": r['user_name'],
+                    "total": r['total_pages'],
+                    "usage": usage_dict,
+                    "usage_list": usage_list,
+                    "snapshot_time": r['snapshot_time']
+                })
+    finally:
+        conn.close()
+    return results, total
+
+
+def _build_job_logs_where_clause(
+    printer_addr: Optional[str] = None,
+    user_kw: Optional[str] = None,
+    mode_kw: Optional[str] = None,
+    computer_kw: Optional[str] = None,
+    start_dt: Optional[datetime] = None,
+    end_dt: Optional[datetime] = None
+) -> Tuple[str, List[Any]]:
+    sql = " WHERE 1=1"
+    params = []
+    
+    if printer_addr and printer_addr != 'all':
+        sql += " AND printer_addr = %s"
+        params.append(printer_addr)
+    
+    if user_kw:
+        sql += " AND (user_name LIKE %s OR login_name LIKE %s)"
+        kw = f"%{user_kw}%"
+        params.extend([kw, kw])
+        
+    if mode_kw:
+        sql += " AND mode LIKE %s"
+        params.append(f"%{mode_kw}%")
+        
+    if computer_kw:
+        sql += " AND computer_name LIKE %s"
+        params.append(f"%{computer_kw}%")
+        
+    if start_dt:
+        sql += " AND start_time >= %s"
+        params.append(start_dt)
+    
+    if end_dt:
+        sql += " AND start_time <= %s"
+        params.append(end_dt)
+        
+    return sql, params
+
+
+def fetch_aggregated_users_paginated(
+    page: int,
+    per_page: int,
+    printer_addr: Optional[str] = None,
+    user_kw: Optional[str] = None,
+    mode_kw: Optional[str] = None,
+    computer_kw: Optional[str] = None,
+    start_dt: Optional[datetime] = None,
+    end_dt: Optional[datetime] = None
+) -> Tuple[List[Dict[str, str]], int]:
+    """
+    Returns (user_list, total_users).
+    user_list is [{"user": "...", "login": "..."}, ...]
+    Ordered by total_pages DESC (top users first).
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            where_sql, params = _build_job_logs_where_clause(
+                printer_addr, user_kw, mode_kw, computer_kw, start_dt, end_dt
+            )
+            
+            # Count total unique users
+            count_sql = f"SELECT COUNT(DISTINCT user_name, login_name) as cnt FROM job_logs {where_sql}"
+            cursor.execute(count_sql, params)
+            total = cursor.fetchone()['cnt']
+            
+            if total == 0:
+                return [], 0
+            
+            # Fetch paginated users
+            # We group by user/login and sort by SUM(total_pages) desc
+            sql = f"""
+            SELECT user_name, login_name, SUM(total_pages) as page_sum
+            FROM job_logs
+            {where_sql}
+            GROUP BY user_name, login_name
+            ORDER BY page_sum DESC
+            """
+            
+            query_params = list(params)
+            if per_page > 0:
+                offset = (page - 1) * per_page
+                sql += " LIMIT %s OFFSET %s"
+                query_params.extend([per_page, offset])
+            
+            cursor.execute(sql, query_params)
+            rows = cursor.fetchall()
+            
+            users = []
+            for r in rows:
+                users.append({
+                    "user": r['user_name'] or "",
+                    "login": r['login_name'] or ""
+                })
+                
+            return users, total
+    finally:
+        conn.close()
+
+
+def fetch_job_logs_by_users(
+    users: List[Dict[str, str]],
+    printer_addr: Optional[str] = None,
+    mode_kw: Optional[str] = None,
+    computer_kw: Optional[str] = None,
+    start_dt: Optional[datetime] = None,
+    end_dt: Optional[datetime] = None
+) -> List[Dict[str, Any]]:
+    """Fetch all logs for specific users (for the current page view)."""
+    if not users:
+        return []
+        
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            # Build base WHERE from filters (skipping user_kw as we filter by specific users)
+            where_sql, params = _build_job_logs_where_clause(
+                printer_addr, None, mode_kw, computer_kw, start_dt, end_dt
+            )
+            
+            # Add user list filter
+            # (user_name = u1 AND login_name = l1) OR ...
+            user_conditions = []
+            for u in users:
+                user_conditions.append("(user_name <=> %s AND login_name <=> %s)")
+                params.extend([u['user'], u['login']])
+            
+            if user_conditions:
+                where_sql += " AND (" + " OR ".join(user_conditions) + ")"
+            
+            sql = f"SELECT * FROM job_logs {where_sql} ORDER BY start_time DESC"
+            cursor.execute(sql, params)
+            rows = cursor.fetchall()
+    finally:
+        conn.close()
+        
+    return _convert_db_rows_to_api(rows)
+
+
+def _convert_db_rows_to_api(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    results = []
+    for r in rows:
+        user_name = r['user_name'] or ""
+        login_name = r['login_name'] or "N/A"
+        results.append({
+            "job_id": r['job_id'],
+            "account_job_id": r['account_job_id'],
+            "mode": r['mode'],
+            "computer": r['computer_name'],
+            "user": user_name,
+            "login": login_name,
+            "start": r['start_time'],
+            "end": r['end_time'],
+            "bw": r['bw_pages'],
+            "color": r['color_pages'],
+            "pages": r['total_pages'],
+            "user_display": normalize_name(user_name, "未知"),
+            "user_key": normalize_name(user_name, "未知").lower(),
+            "login_display": normalize_name(login_name, "N/A"),
+            "login_key": normalize_name(login_name, "N/A").lower(),
+            "printer": r['printer_addr']
+        })
+    return results
+
 
 # 建議用環境變數放帳密，不要硬寫在檔案裡
 # Windows CMD:
@@ -387,6 +814,9 @@ def cleanup_old_exports() -> None:
 
 
 def download_exports(printers: Optional[List[str]] = None) -> None:
+    # Ensure DB table exists
+    init_db()
+
     uc_dir = OUT_DIR / "usercount"
     jl_dir = OUT_DIR / "joblog"
     ensure_dir(uc_dir)
@@ -401,9 +831,19 @@ def download_exports(printers: Optional[List[str]] = None) -> None:
             request_with_retry(client.login)
             uc = request_with_retry(client.export_user_count, uc_dir)
             print("OK UC    :", uc)
+            
+            # Sync User Count to DB
+            if uc:
+                uc_count = sync_usercount_to_db(uc, base)
+                print(f"DB Sync UC: Inserted {uc_count} rows")
 
             jl = request_with_retry(client.export_joblog, jl_dir)
             print("OK JOBLOG:", jl)
+            
+            # Sync to DB
+            if jl:
+                count = sync_csv_to_db(jl, base)
+                print(f"DB Sync  : Inserted/Ignored {count} rows")
 
         except Exception as e:
             print("FAIL:", e)
@@ -412,6 +852,84 @@ def download_exports(printers: Optional[List[str]] = None) -> None:
     
     # Run cleanup after all downloads
     cleanup_old_exports()
+
+
+def fetch_job_logs(
+    printer_addr: Optional[str] = None,
+    user_kw: Optional[str] = None,
+    mode_kw: Optional[str] = None,
+    computer_kw: Optional[str] = None,
+    start_dt: Optional[datetime] = None,
+    end_dt: Optional[datetime] = None
+) -> List[Dict[str, Any]]:
+    """Query job logs from MySQL"""
+    conn = get_db_connection()
+    rows = []
+    try:
+        with conn.cursor() as cursor:
+            sql = "SELECT * FROM job_logs WHERE 1=1"
+            params = []
+            
+            if printer_addr and printer_addr != 'all':
+                sql += " AND printer_addr = %s"
+                params.append(printer_addr)
+            
+            if user_kw:
+                # user_name OR login_name
+                sql += " AND (user_name LIKE %s OR login_name LIKE %s)"
+                kw = f"%{user_kw}%"
+                params.extend([kw, kw])
+                
+            if mode_kw:
+                sql += " AND mode LIKE %s"
+                params.append(f"%{mode_kw}%")
+                
+            if computer_kw:
+                sql += " AND computer_name LIKE %s"
+                params.append(f"%{computer_kw}%")
+                
+            if start_dt:
+                sql += " AND start_time >= %s"
+                params.append(start_dt)
+            
+            if end_dt:
+                sql += " AND start_time <= %s"
+                params.append(end_dt)
+            
+            # Order by start_time DESC
+            sql += " ORDER BY start_time DESC"
+            
+            cursor.execute(sql, params)
+            rows = cursor.fetchall()
+    finally:
+        conn.close()
+        
+    # Convert to format expected by webapp (shim)
+    results = []
+    for r in rows:
+        user_name = r['user_name'] or ""
+        login_name = r['login_name'] or "N/A"
+        results.append({
+            "job_id": r['job_id'],
+            "account_job_id": r['account_job_id'],
+            "mode": r['mode'],
+            "computer": r['computer_name'],
+            "user": user_name,
+            "login": login_name,
+            "start": r['start_time'],
+            "end": r['end_time'],
+            "bw": r['bw_pages'],
+            "color": r['color_pages'],
+            # calculated fields
+            "pages": r['total_pages'],
+            "user_display": normalize_name(user_name, "未知"),
+            "user_key": normalize_name(user_name, "未知").lower(),
+            "login_display": normalize_name(login_name, "N/A"),
+            "login_key": normalize_name(login_name, "N/A").lower(),
+            # for grouping if needed
+            "printer": r['printer_addr']
+        })
+    return results
 
 
 def parse_cli_time(value: Optional[str]) -> Optional[datetime]:
@@ -544,13 +1062,13 @@ def load_usercount_summary(
 
 def summarize_usercount(
     printer: str,
-    file_path: Path,
     user_filter: Optional[str],
     limit: int,
     show_zero: bool,
 ) -> None:
-    summary = build_usercount_summary(file_path, user_filter, show_zero)
-    print(f"使用檔案: {file_path.name}")
+    # Use DB
+    summary, _ = fetch_latest_user_counts(printer, user_filter, show_zero)
+    print(f"來源: MySQL DB (最新快照)")
 
     if not summary:
         print("找不到符合條件的用戶。")
@@ -563,6 +1081,13 @@ def summarize_usercount(
         usage_list = item["usage_list"]
         snippet = ", ".join(f"{part['label']}:{part['pages']}" for part in usage_list[:4]) or "0"
         print(f"- {name}: 總張數 {total} | {snippet}")
+
+
+def cmd_counts(args: argparse.Namespace) -> None:
+    printers = resolve_printers(args.printer)
+    for base in printers:
+        print(f"\n== {base} ==")
+        summarize_usercount(base, args.user, args.limit, args.show_zero)
 
 
 
@@ -669,30 +1194,21 @@ def aggregate_joblog_reports(reports: List[Dict[str, Any]]) -> Optional[Dict[str
     return {"totals": totals, "users": users}
 
 
-def build_joblog_report(
-    file_path: Path,
-    user_kw: Optional[str],
-    mode_kw: Optional[str],
-    computer_kw: Optional[str],
-    start_dt: Optional[datetime],
-    end_dt: Optional[datetime],
-) -> Dict[str, Any]:
-    entries = joblog_entries_from_csv(file_path)
-    filtered = filter_joblog_entries(entries, user_kw, mode_kw, computer_kw, start_dt, end_dt)
-    total_jobs = len(filtered)
-    total_bw = sum(entry["bw"] for entry in filtered)
-    total_color = sum(entry["color"] for entry in filtered)
-    total_pages = sum(entry["pages"] for entry in filtered)
+def _aggregate_entries_to_report(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
+    total_jobs = len(entries)
+    total_bw = sum(entry["bw"] for entry in entries)
+    total_color = sum(entry["color"] for entry in entries)
+    total_pages = sum(entry["pages"] for entry in entries)
 
-    stats = defaultdict(lambda: {"jobs": 0, "bw": 0, "color": 0, "pages": 0, "user": "", "login": ""})
-    for entry in filtered:
+    pstats = defaultdict(lambda: {"jobs": 0, "bw": 0, "color": 0, "pages": 0, "user": "", "login": ""})
+    for entry in entries:
         key = (entry.get("user_key"), entry.get("login_key"))
-        stats[key]["jobs"] += 1
-        stats[key]["bw"] += entry["bw"]
-        stats[key]["color"] += entry["color"]
-        stats[key]["pages"] += entry["pages"]
-        stats[key]["user"] = entry.get("user_display") or normalize_name(entry.get("user"))
-        stats[key]["login"] = entry.get("login_display") or normalize_name(entry.get("login"), "N/A")
+        pstats[key]["jobs"] += 1
+        pstats[key]["bw"] += entry["bw"]
+        pstats[key]["color"] += entry["color"]
+        pstats[key]["pages"] += entry["pages"]
+        pstats[key]["user"] = entry.get("user_display") or normalize_name(entry.get("user"))
+        pstats[key]["login"] = entry.get("login_display") or normalize_name(entry.get("login"), "N/A")
 
     top_users = [
         {
@@ -703,14 +1219,13 @@ def build_joblog_report(
             "color": data["color"],
             "pages": data["pages"],
         }
-        for data in sorted(stats.values(), key=lambda item: (item["pages"], item["jobs"]), reverse=True)
+        for data in sorted(pstats.values(), key=lambda item: (item["pages"], item["jobs"]), reverse=True)
     ]
 
-    recent = sorted(filtered, key=lambda entry: entry.get("start") or datetime.min, reverse=True)
+    recent = sorted(entries, key=lambda entry: entry.get("start") or datetime.min, reverse=True)
 
     return {
-        "file_path": file_path,
-        "entries": filtered,
+        "entries": entries,
         "top_users": top_users,
         "recent": recent,
         "totals": {
@@ -721,6 +1236,21 @@ def build_joblog_report(
         },
     }
 
+def build_joblog_report(
+    file_path: Path,
+    user_kw: Optional[str],
+    mode_kw: Optional[str],
+    computer_kw: Optional[str],
+    start_dt: Optional[datetime],
+    end_dt: Optional[datetime],
+) -> Dict[str, Any]:
+    # Backward compatibility for CLI or file-based usage
+    entries = joblog_entries_from_csv(file_path)
+    filtered = filter_joblog_entries(entries, user_kw, mode_kw, computer_kw, start_dt, end_dt)
+    report = _aggregate_entries_to_report(filtered)
+    report["file_path"] = file_path
+    return report
+
 
 def load_joblog_report(
     printer: str,
@@ -730,11 +1260,16 @@ def load_joblog_report(
     start_dt: Optional[datetime],
     end_dt: Optional[datetime],
 ) -> Optional[Dict[str, Any]]:
-    file_path = latest_export_file("joblog", printer)
-    if not file_path:
-        return None
-    report = build_joblog_report(file_path, user_kw, mode_kw, computer_kw, start_dt, end_dt)
+    # New DB-based implementation
+    # 1. Fetch from DB
+    entries = fetch_job_logs(printer, user_kw, mode_kw, computer_kw, start_dt, end_dt)
+    
+    # 2. Aggregate
+    report = _aggregate_entries_to_report(entries)
+    
+    # 3. Add metadata
     report["printer"] = printer
+    report["file_path"] = Path("MySQL_DB") 
     return report
 
 
