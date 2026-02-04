@@ -1,140 +1,149 @@
 {% extends "base.html" %}
 
 {% block content %}
-  <section class="card">
-    <h1>主要使用者排行</h1>
-    <p>依照時間與條件篩選，查看每台機器與跨機器教師的列印 / 影印量。</p>
-    <form method="get" class="form-grid">
-      <label>
-        <span>列印機</span>
-        <select name="printer">
-          <option value="all" {% if query.printer == "all" %}selected{% endif %}>全部</option>
-          {% for printer in printer_choices %}
-            <option value="{{ printer.value }}" {% if query.printer == printer.value %}selected{% endif %}>{{ printer.label }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <label>
-        <span>用戶 / 登入關鍵字</span>
-        <input type="text" name="user" value="{{ query.user }}" />
-      </label>
-      <label>
-        <span>工作模式</span>
-        <input type="text" name="mode" value="{{ query.mode }}" placeholder="列印 / 影印" />
-      </label>
-      <label>
-        <span>電腦名稱</span>
-        <input type="text" name="computer" value="{{ query.computer }}" />
-      </label>
-      <label>
-        <span>時間範圍模式</span>
-        <select name="time_mode" class="time-mode-select">
-          <option value="all" {% if query.time_mode == "all" %}selected{% endif %}>全部資料</option>
-          <option value="month" {% if query.time_mode == "month" %}selected{% endif %}>指定月份</option>
-          <option value="week" {% if query.time_mode == "week" %}selected{% endif %}>指定週</option>
-          <option value="custom" {% if query.time_mode == "custom" %}selected{% endif %}>自訂時間</option>
-        </select>
-      </label>
-      <label class="time-field" data-time-field="month">
-        <span>指定月份</span>
-        <input type="month" name="month" value="{{ query.month }}" />
-      </label>
-      <label class="time-field" data-time-field="week">
-        <span>指定週 (YYYY-Www)</span>
-        <input type="text" name="week" value="{{ query.week }}" placeholder="2026-W05" />
-      </label>
-      <label class="time-field" data-time-field="custom">
-        <span>開始時間</span>
-        <input type="datetime-local" name="start" value="{{ query.start }}" />
-      </label>
-      <label class="time-field" data-time-field="custom">
-        <span>結束時間</span>
-        <input type="datetime-local" name="end" value="{{ query.end }}" />
-      </label>
-      <label>
-        <span>每台顯示筆數</span>
-        <input type="number" name="limit" value="{{ query.limit }}" />
-      </label>
-      <label>
-        <span>跨機器顯示筆數</span>
-        <input type="number" name="summary_limit" value="{{ query.summary_limit }}" />
-      </label>
-      <div style="grid-column: 1 / -1; display: flex; gap: 0.75rem">
-        <button type="submit">套用篩選</button>
-        <a class="btn" href="{{ url_for('export_leaders') }}{% if query_string %}?{{ query_string }}{% endif %}">導出 Excel</a>
-      </div>
-    </form>
-  </section>
+<section class="card">
+  <h1>主要使用者排行</h1>
+  <p>依照時間與條件篩選，查看每台機器與跨機器教師的列印 / 影印量。</p>
+  <form method="get" class="form-grid">
+    <label>
+      <span>列印機</span>
+      <select name="printer">
+        <option value="all" {% if query.printer=="all" %}selected{% endif %}>全部</option>
+        {% for printer in printer_choices %}
+        <option value="{{ printer.value }}" {% if query.printer==printer.value %}selected{% endif %}>{{ printer.label }}
+        </option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      <span>用戶 / 登入關鍵字</span>
+      <input type="text" name="user" value="{{ query.user }}" />
+    </label>
+    <label>
+      <span>工作模式</span>
+      <select name="mode">
+        <option value="" {% if not query.mode %}selected{% endif %}>全部</option>
+        <option value="列印" {% if query.mode=="列印" %}selected{% endif %}>列印</option>
+        <option value="影印" {% if query.mode=="影印" %}selected{% endif %}>影印</option>
+        <option value="掃描" {% if query.mode=="掃描" %}selected{% endif %}>掃描</option>
+      </select>
+    </label>
+    <label>
+      <span>電腦名稱</span>
+      <input type="text" name="computer" value="{{ query.computer }}" />
+    </label>
+    <label>
+      <span>時間範圍模式</span>
+      <select name="time_mode" class="time-mode-select">
+        <option value="all" {% if query.time_mode=="all" %}selected{% endif %}>全部資料</option>
+        <option value="month" {% if query.time_mode=="month" %}selected{% endif %}>指定月份</option>
+        <option value="week" {% if query.time_mode=="week" %}selected{% endif %}>指定週</option>
+        <option value="custom" {% if query.time_mode=="custom" %}selected{% endif %}>自訂時間</option>
+      </select>
+    </label>
+    <label class="time-field" data-time-field="month">
+      <span>指定月份</span>
+      <input type="month" name="month" value="{{ query.month }}" />
+    </label>
+    <label class="time-field" data-time-field="week">
+      <span>指定週 (YYYY-Www)</span>
+      <input type="text" name="week" value="{{ query.week }}" placeholder="2026-W05" />
+    </label>
+    <label class="time-field" data-time-field="custom">
+      <span>開始時間</span>
+      <input type="datetime-local" name="start" value="{{ query.start }}" />
+    </label>
+    <label class="time-field" data-time-field="custom">
+      <span>結束時間</span>
+      <input type="datetime-local" name="end" value="{{ query.end }}" />
+    </label>
+    <label>
+      <span>每台顯示筆數</span>
+      <input type="number" name="limit" value="{{ query.limit }}" />
+    </label>
+    <label>
+      <span>跨機器顯示筆數</span>
+      <input type="number" name="summary_limit" value="{{ query.summary_limit }}" />
+    </label>
+    <div style="grid-column: 1 / -1; display: flex; gap: 0.75rem">
+      <button type="submit">套用篩選</button>
+      <a class="btn" href="{{ url_for('export_leaders') }}{% if query_string %}?{{ query_string }}{% endif %}">導出
+        Excel</a>
+    </div>
+  </form>
+</section>
 
-  {% if errors %}
-    <section class="card error">
-      {% for err in errors %}
-        <div>{{ err }}</div>
-      {% endfor %}
-    </section>
-  {% endif %}
-
-  {% for block in results %}
-    <section class="card">
-      <h2>{{ block.label }} <span class="tag">{{ block.printer }}</span></h2>
-      {% if block.error %}
-        <div class="error">{{ block.error }}</div>
-      {% else %}
-        <p>使用匯出：{{ block.file_name }}，符合 {{ block.totals.jobs }} 筆，共 {{ block.totals.pages }} 張 (黑白 {{ block.totals.bw }} / 彩色 {{ block.totals.color }})。</p>
-        <table>
-          <thead>
-            <tr>
-              <th>用戶</th>
-              <th>筆數</th>
-              <th>張數</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for item in block.top_users %}
-              <tr>
-                <td>
-                  {{ item.user }}
-                  {% if item.login and item.login != item.user %}
-                    <div style="font-size: 0.85rem; color: #6b7280">{{ item.login }}</div>
-                  {% endif %}
-                </td>
-                <td>{{ item.jobs }}</td>
-                <td>{{ item.pages }}<br /><small>黑白 {{ item.bw }} / 彩色 {{ item.color }}</small></td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      {% endif %}
-    </section>
+{% if errors %}
+<section class="card error">
+  {% for err in errors %}
+  <div>{{ err }}</div>
   {% endfor %}
+</section>
+{% endif %}
 
-  {% if aggregated %}
-    <section class="card">
-      <h2>跨列印機教師彙總</h2>
-      <p>總筆數 {{ aggregated.totals.jobs }} ，張數 {{ aggregated.totals.pages }} (黑白 {{ aggregated.totals.bw }} / 彩色 {{ aggregated.totals.color }})。</p>
-      <table>
-        <thead>
-          <tr>
-            <th>用戶</th>
-            <th>筆數</th>
-            <th>張數</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for item in aggregated.users %}
-            <tr>
-              <td>
-                {{ item.user }}
-                {% if item.login and item.login != item.user %}
-                  <div style="font-size: 0.85rem; color: #6b7280">{{ item.login }}</div>
-                {% endif %}
-              </td>
-              <td>{{ item.jobs }}</td>
-              <td>{{ item.pages }}<br /><small>黑白 {{ item.bw }} / 彩色 {{ item.color }}</small></td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </section>
+{% for block in results %}
+<section class="card">
+  <h2>{{ block.label }} <span class="tag">{{ block.printer }}</span></h2>
+  {% if block.error %}
+  <div class="error">{{ block.error }}</div>
+  {% else %}
+  <p>使用匯出：{{ block.file_name }}，符合 {{ block.totals.jobs }} 筆，共 {{ block.totals.pages }} 張 (黑白 {{ block.totals.bw }} / 彩色
+    {{ block.totals.color }})。</p>
+  <table>
+    <thead>
+      <tr>
+        <th>用戶</th>
+        <th>筆數</th>
+        <th>張數</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in block.top_users %}
+      <tr>
+        <td>
+          {{ item.user }}
+          {% if item.login and item.login != item.user %}
+          <div style="font-size: 0.85rem; color: #6b7280">{{ item.login }}</div>
+          {% endif %}
+        </td>
+        <td>{{ item.jobs }}</td>
+        <td>{{ item.pages }}<br /><small>黑白 {{ item.bw }} / 彩色 {{ item.color }}</small></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
   {% endif %}
+</section>
+{% endfor %}
+
+{% if aggregated %}
+<section class="card">
+  <h2>跨列印機教師彙總</h2>
+  <p>總筆數 {{ aggregated.totals.jobs }} ，張數 {{ aggregated.totals.pages }} (黑白 {{ aggregated.totals.bw }} / 彩色 {{
+    aggregated.totals.color }})。</p>
+  <table>
+    <thead>
+      <tr>
+        <th>用戶</th>
+        <th>筆數</th>
+        <th>張數</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in aggregated.users %}
+      <tr>
+        <td>
+          {{ item.user }}
+          {% if item.login and item.login != item.user %}
+          <div style="font-size: 0.85rem; color: #6b7280">{{ item.login }}</div>
+          {% endif %}
+        </td>
+        <td>{{ item.jobs }}</td>
+        <td>{{ item.pages }}<br /><small>黑白 {{ item.bw }} / 彩色 {{ item.color }}</small></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
 {% endblock %}
