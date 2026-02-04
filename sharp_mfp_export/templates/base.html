@@ -117,6 +117,7 @@
 
     input[type="text"],
     input[type="number"],
+    input[type="month"],
     input[type="datetime-local"],
     select {
       width: 100%;
@@ -124,6 +125,18 @@
       border: 1px solid var(--border);
       border-radius: 6px;
       font-size: 1rem;
+      font-family: inherit;
+    }
+
+    /* Better styling for month input calendar */
+    input[type="month"]::-webkit-calendar-picker-indicator {
+      cursor: pointer;
+      border-radius: 4px;
+      padding: 4px;
+    }
+
+    input[type="month"]::-webkit-calendar-picker-indicator:hover {
+      background-color: rgba(0, 0, 0, 0.05);
     }
 
     button,
@@ -229,6 +242,19 @@
       const form = select.closest('form');
       if (!form) return;
       const mode = select.value;
+
+      // Clear all time field values when switching to 'all' mode
+      if (mode === 'all') {
+        const month = form.querySelector('[name="month"]');
+        const week = form.querySelector('[name="week"]');
+        const start = form.querySelector('[name="start"]');
+        const end = form.querySelector('[name="end"]');
+        if (month) month.value = '';
+        if (week) week.value = '';
+        if (start) start.value = '';
+        if (end) end.value = '';
+      }
+
       form.querySelectorAll('[data-time-field]').forEach((el) => {
         const target = el.getAttribute('data-time-field');
         if (!target) return;

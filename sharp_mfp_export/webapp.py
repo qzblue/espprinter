@@ -9,6 +9,7 @@ from collections import defaultdict
 import subprocess
 
 from flask import Flask, render_template, request, send_file, Response, stream_with_context
+from flask_caching import Cache
 
 try:
     from openpyxl import Workbook
@@ -34,6 +35,11 @@ from sharp_mfp_export import (
 )
 
 app = Flask(__name__)
+
+# Configure caching with simple in-memory cache
+app.config['CACHE_TYPE'] = 'SimpleCache'
+app.config['CACHE_DEFAULT_TIMEOUT'] = 300  # 5 minutes
+cache = Cache(app)
 
 
 try:
@@ -236,16 +242,30 @@ def _format_usage_entries(
 
 
 def _build_jobs_query() -> Dict[str, Any]:
+    time_mode = request.args.get("time_mode", "all")
+    
+    # Clear time field values if mode is 'all' to ensure clean reset
+    if time_mode == "all":
+        month = ""
+        week = ""
+        start = ""
+        end = ""
+    else:
+        month = request.args.get("month", "").strip()
+        week = request.args.get("week", "").strip()
+        start = request.args.get("start", "").strip()
+        end = request.args.get("end", "").strip()
+    
     return {
         "printer": request.args.get("printer", "all"),
         "user": request.args.get("user", "").strip(),
         "mode": request.args.get("mode", "").strip(),
         "computer": request.args.get("computer", "").strip(),
-        "time_mode": request.args.get("time_mode", "all"),
-        "month": request.args.get("month", "").strip(),
-        "week": request.args.get("week", "").strip(),
-        "start": request.args.get("start", "").strip(),
-        "end": request.args.get("end", "").strip(),
+        "time_mode": time_mode,
+        "month": month,
+        "week": week,
+        "start": start,
+        "end": end,
         "limit": request.args.get("limit", "5"),
         "page": request.args.get("page", "1"),
         "per_page": request.args.get("per_page", "2"),
@@ -418,14 +438,28 @@ def _prepare_jobs_context(query_args: Dict[str, str]) -> Dict[str, Any]:
 
 
 def _build_counts_query() -> Dict[str, Any]:
+    time_mode = request.args.get("time_mode", "all")
+    
+    # Clear time field values if mode is 'all' to ensure clean reset
+    if time_mode == "all":
+        month = ""
+        week = ""
+        start = ""
+        end = ""
+    else:
+        month = request.args.get("month", "").strip()
+        week = request.args.get("week", "").strip()
+        start = request.args.get("start", "").strip()
+        end = request.args.get("end", "").strip()
+    
     return {
         "printer": request.args.get("printer", "all"),
         "user": request.args.get("user", "").strip(),
-        "time_mode": request.args.get("time_mode", "all"),
-        "month": request.args.get("month", "").strip(),
-        "week": request.args.get("week", "").strip(),
-        "start": request.args.get("start", "").strip(),
-        "end": request.args.get("end", "").strip(),
+        "time_mode": time_mode,
+        "month": month,
+        "week": week,
+        "start": start,
+        "end": end,
         "categories": request.args.getlist("category"),
         "limit": request.args.get("limit", "0"),
         "show_zero": request.args.get("show_zero") == "on",
@@ -770,6 +804,7 @@ def index():
 
 
 @app.route("/counts")
+@cache.cached(timeout=300, query_string=True)
 def counts():
     query = _build_counts_query()
     context = _prepare_counts_context(query)
@@ -806,6 +841,7 @@ def jobs():
 
 
 @app.route("/leaders")
+@cache.cached(timeout=300, query_string=True)
 def leaders():
     query = _build_leaders_query()
     context = _prepare_leaders_context(query)

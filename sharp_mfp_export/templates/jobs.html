@@ -43,19 +43,19 @@
     </label>
     <label class="time-field" data-time-field="month">
       <span>指定月份</span>
-      <input type="month" name="month" value="{{ query.month }}" />
+      <input type="month" name="month" value="{{ query.month }}" autocomplete="off" />
     </label>
     <label class="time-field" data-time-field="week">
       <span>指定週 (YYYY-Www)</span>
-      <input type="text" name="week" value="{{ query.week }}" placeholder="2026-W05" />
+      <input type="text" name="week" value="{{ query.week }}" placeholder="2026-W05" autocomplete="off" />
     </label>
     <label class="time-field" data-time-field="custom">
       <span>開始時間</span>
-      <input type="datetime-local" name="start" value="{{ query.start }}" />
+      <input type="datetime-local" name="start" value="{{ query.start }}" autocomplete="off" />
     </label>
     <label class="time-field" data-time-field="custom">
       <span>結束時間</span>
-      <input type="datetime-local" name="end" value="{{ query.end }}" />
+      <input type="datetime-local" name="end" value="{{ query.end }}" autocomplete="off" />
     </label>
     <label>
       <span>每頁顯示用戶數</span>
