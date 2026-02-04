@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="zh-Hant">
+
+<head>
+  <meta charset="utf-8" />
+  <title>{{ title or "澳門聖保祿學校列印機使用記錄查詢系統" }}</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" />
+  <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f7f7f7;
+      --card: #ffffff;
+      --border: #dcdcdc;
+      --text: #1f2933;
+      --link: #0d6efd;
+      --accent: #2563eb;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "Noto Sans TC", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    header {
+      background: #111827;
+      color: #fff;
+    }
+
+    header .inner {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 0.8rem 1rem;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      font-size: 1.1rem;
+      font-weight: bold;
+      gap: 0.8rem;
+    }
+
+    .brand img {
+      height: 32px;
+      width: auto;
+    }
+
+    nav a {
+      color: #e5e7eb;
+      text-decoration: none;
+      margin-left: 1.2rem;
+      font-weight: 500;
+      transition: color 0.2s;
+    }
+
+    nav a:hover,
+    nav a.active {
+      color: #fff;
+      text-decoration: none;
+    }
+
+    nav a.active {
+      font-weight: 700;
+      border-bottom: 2px solid var(--accent);
+      padding-bottom: 2px;
+    }
+
+    main {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 2rem 1rem 4rem;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      box-shadow: 0 10px 30px rgb(15 23 42 / 0.1);
+      margin-bottom: 2rem;
+    }
+
+    h1,
+    h2,
+    h3 {
+      margin-top: 0;
+    }
+
+    form {
+      display: grid;
+      gap: 1rem;
+    }
+
+    .time-field {
+      display: none;
+    }
+
+    .time-field.active {
+      display: block;
+    }
+
+    label span {
+      font-weight: 600;
+    }
+
+    input[type="text"],
+    input[type="number"],
+    input[type="datetime-local"],
+    select {
+      width: 100%;
+      padding: 0.6rem 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 1rem;
+    }
+
+    button,
+    .btn {
+      border: none;
+      background: var(--accent);
+      color: #fff;
+      padding: 0.7rem 1.5rem;
+      border-radius: 8px;
+      font-size: 1rem;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.3rem;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 1rem;
+    }
+
+    th,
+    td {
+      border-bottom: 1px solid var(--border);
+      padding: 0.6rem 0.3rem;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .tag {
+      display: inline-block;
+      background: #e0f2fe;
+      color: #0369a1;
+      border-radius: 999px;
+      padding: 0.1rem 0.75rem;
+      font-size: 0.85rem;
+      margin: 0 0.2rem 0.2rem 0;
+    }
+
+    .error {
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      background: #fee2e2;
+      color: #991b1b;
+      margin-bottom: 1rem;
+    }
+
+    footer {
+      text-align: center;
+      margin-top: 3rem;
+      color: #6b7280;
+      font-size: 0.9rem;
+    }
+
+    @media (min-width: 720px) {
+      .form-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1rem 2rem;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <div class="inner">
+      <div class="brand">
+        <img src="{{ url_for('static', filename='logo_transparent_small.png') }}" alt="Logo" />
+        <span>澳門聖保祿學校列印機使用記錄查詢系統</span>
+      </div>
+      <nav>
+        <a href="{{ url_for('index') }}" class="{% if request.endpoint == 'index' %}active{% endif %}">首頁</a>
+        <a href="{{ url_for('counts') }}" class="{% if request.endpoint == 'counts' %}active{% endif %}">用戶統計</a>
+        <a href="{{ url_for('jobs') }}" class="{% if request.endpoint == 'jobs' %}active{% endif %}">列印紀錄</a>
+        <a href="{{ url_for('leaders') }}" class="{% if request.endpoint == 'leaders' %}active{% endif %}">主要使用者</a>
+      </nav>
+    </div>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+    <footer>
+      <div class="login-footer ng-binding ng-scope" ng-if="rebranding">
+        <a href="https://notbyai.fyi/tw/" target="_blank" rel="noopener noreferrer">
+          <img src="{{ url_for('static', filename='images/noaiwhite.png') }}" alt="not by ai"
+            style="height:30px; width:auto; max-width:90%; margin:10px 0; display:inline-block; cursor:pointer;">
+        </a>
+        <br>
+        <span localized="">如有問題請咨詢澳門聖保祿學校教學資訊科技組 James.</span>
+        <br>
+        © 2026 James Chu · Powered by Headwind MDM
+      </div>
+    </footer>
+  </main>
+</body>
+<script>
+  (function () {
+    function refreshTimeFields(select) {
+      if (!select) return;
+      const form = select.closest('form');
+      if (!form) return;
+      const mode = select.value;
+      form.querySelectorAll('[data-time-field]').forEach((el) => {
+        const target = el.getAttribute('data-time-field');
+        if (!target) return;
+        if (mode === target || (mode === 'custom' && target === 'custom')) {
+          el.classList.add('active');
+        } else {
+          el.classList.remove('active');
+        }
+      });
+    }
+
+    function autoSelect(select) {
+      const form = select.closest('form');
+      if (!form || select.value !== 'all') {
+        return;
+      }
+      const month = form.querySelector('[name="month"]');
+      const week = form.querySelector('[name="week"]');
+      const start = form.querySelector('[name="start"]');
+      const end = form.querySelector('[name="end"]');
+      if (month && month.value) {
+        select.value = 'month';
+      } else if (week && week.value) {
+        select.value = 'week';
+      } else if ((start && start.value) || (end && end.value)) {
+        select.value = 'custom';
+      }
+    }
+
+    function init() {
+      document.querySelectorAll('.time-mode-select').forEach((select) => {
+        autoSelect(select);
+        refreshTimeFields(select);
+        select.addEventListener('change', () => refreshTimeFields(select));
+      });
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', init);
+    } else {
+      init();
+    }
+  })();
+</script>
+
+</html>

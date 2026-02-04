@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <section class="card">
+    <h1>用戶列印統計</h1>
+    <p>依時間範圍與功能分類，統計各使用者在不同列印機的黑白 / 全彩張數。</p>
+    <form method="get" class="form-grid">
+      <label>
+        <span>列印機</span>
+        <select name="printer">
+          <option value="all" {% if query.printer == "all" %}selected{% endif %}>全部</option>
+          {% for printer in printer_choices %}
+            <option value="{{ printer.value }}" {% if query.printer == printer.value %}selected{% endif %}>{{ printer.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span>用戶關鍵字</span>
+        <input type="text" name="user" value="{{ query.user }}" placeholder="例如 psi" />
+      </label>
+      <label>
+        <span>時間範圍模式</span>
+        <select name="time_mode" class="time-mode-select">
+          <option value="all" {% if query.time_mode == "all" %}selected{% endif %}>全部資料</option>
+          <option value="month" {% if query.time_mode == "month" %}selected{% endif %}>指定月份</option>
+          <option value="week" {% if query.time_mode == "week" %}selected{% endif %}>指定週</option>
+          <option value="custom" {% if query.time_mode == "custom" %}selected{% endif %}>自訂時間</option>
+        </select>
+      </label>
+      <label class="time-field" data-time-field="month">
+        <span>指定月份</span>
+        <input type="month" name="month" value="{{ query.month }}" />
+      </label>
+      <label class="time-field" data-time-field="week">
+        <span>指定週 (YYYY-Www)</span>
+        <input type="text" name="week" value="{{ query.week }}" placeholder="2026-W05" />
+      </label>
+      <label class="time-field" data-time-field="custom">
+        <span>開始時間</span>
+        <input type="datetime-local" name="start" value="{{ query.start }}" />
+      </label>
+      <label class="time-field" data-time-field="custom">
+        <span>結束時間</span>
+        <input type="datetime-local" name="end" value="{{ query.end }}" />
+      </label>
+      <label>
+        <span>顯示筆數 (<=0 表示全部)</span>
+        <input type="number" name="limit" value="{{ query.limit }}" />
+      </label>
+      <label style="display: flex; align-items: center; gap: 0.5rem; margin-top: 1.4rem">
+        <input type="checkbox" name="show_zero" {% if query.show_zero %}checked{% endif %} />
+        <span>列出 0 張使用者</span>
+      </label>
+      <div style="grid-column: 1 / -1">
+        <span style="font-weight: 600; display: block; margin-bottom: 0.5rem">統計分類 (可多選)</span>
+        <div style="display: flex; flex-wrap: wrap; gap: 0.5rem 1rem">
+          {% for cat in category_choices %}
+            <label style="display: flex; align-items: center; gap: 0.35rem">
+              <input type="checkbox" name="category" value="{{ cat.value }}" {% if cat.value in selected_categories %}checked{% endif %} />
+              <span>{{ cat.label }}</span>
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+      <div style="grid-column: 1 / -1; display: flex; gap: 0.75rem; flex-wrap: wrap">
+        <button type="submit">套用篩選</button>
+        <a class="btn" href="{{ url_for('export_stats') }}{% if query_string %}?{{ query_string }}{% endif %}">導出 Excel (分開)</a>
+        <a class="btn" href="{{ url_for('export_stats_combined') }}{% if query_string %}?{{ query_string }}{% endif %}">導出 Excel (匯總)</a>
+      </div>
+    </form>
+  </section>
+
+  {% if errors %}
+    <section class="card error">
+      {% for err in errors %}
+        <div>{{ err }}</div>
+      {% endfor %}
+    </section>
+  {% endif %}
+
+  {% for block in results %}
+    <section class="card">
+      <h2>{{ block.label }} <span class="tag">{{ block.printer }}</span></h2>
+      {% if block.error %}
+        <div class="error">{{ block.error }}</div>
+      {% else %}
+        <p>使用匯出：{{ block.file_name }}，顯示 {{ block.entries | length }} 筆。</p>
+        <table>
+          <thead>
+            <tr>
+              <th>用戶名稱</th>
+              {% for col in category_columns %}
+                <th>{{ col.label }}</th>
+              {% endfor %}
+              <th>總張數</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in block.entries %}
+              <tr>
+                <td>{{ item.name }}</td>
+                {% for col in category_columns %}
+                  <td>{{ item.category_map[col.key] if col.key in item.category_map else 0 }}</td>
+                {% endfor %}
+                <td>{{ item.total }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
+    </section>
+  {% endfor %}
+  {% if aggregated %}
+    <section class="card">
+      <h2>跨列印機彙總</h2>
+      {% if aggregated.entries %}
+        <table>
+          <thead>
+            <tr>
+              <th>用戶名稱</th>
+              {% for col in category_columns %}
+                <th>{{ col.label }}</th>
+              {% endfor %}
+              <th>總張數</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in aggregated.entries %}
+              <tr>
+                <td>{{ item.name }}</td>
+                {% for col in category_columns %}
+                  <td>{{ item.category_map[col.key] if col.key in item.category_map else 0 }}</td>
+                {% endfor %}
+                <td>{{ item.total }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <div class="error">查無跨機器資料。</div>
+      {% endif %}
+    </section>
+  {% endif %}
+
+{% endblock %}

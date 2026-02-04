@@ -1,0 +1,64 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: printer-data-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  # K3s 默認使用 local-path storage class，通常不需要指定 storageClassName，或者使用 "local-path"
+  storageClassName: local-path
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: printer-webapp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: printer-webapp
+  template:
+    metadata:
+      labels:
+        app: printer-webapp
+    spec:
+      containers:
+      - name: printer-webapp
+        # 替換為您的鏡像名稱，如果在 K3s 本地導入，需設 imagePullPolicy: Never 或 IfNotPresent
+        image: printer-webapp:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5000
+        env:
+        # 請根據實際情況修改帳號密碼，或使用 Secret
+        - name: SHARP_USER
+          value: "admin"
+        - name: SHARP_PASS
+          value: "admin"
+        volumeMounts:
+        - name: data-volume
+          mountPath: /app/exports
+      volumes:
+      - name: data-volume
+        persistentVolumeClaim:
+          claimName: printer-data-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: printer-webapp-service
+spec:
+  type: NodePort
+  selector:
+    app: printer-webapp
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 5000
+      # 您可以指定一個範圍內的 NodePort，或讓 K8s 自動分配
+      nodePort: 30080

@@ -1,0 +1,222 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="card">
+  <h1>校內列印機查詢控制台</h1>
+  <p>
+    透過這個系統，我們可以快速檢視支持用戶認證的聖保祿校内Sharp列印機的使用情況。<br />
+    點選下方按鈕即可進入對應的查詢工具或執行數據更新。
+  </p>
+  <div style="display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 1rem">
+    <a class="btn" href="{{ url_for('counts') }}">查看用戶統計</a>
+    <a class="btn" href="{{ url_for('jobs') }}">查看列印紀錄</a>
+    <a class="btn" href="{{ url_for('leaders') }}">查看主要使用者</a>
+    <button class="btn" id="update-btn" style="background: #059669"><i class="fas fa-sync"></i> 立即更新數據</button>
+  </div>
+</section>
+
+<section class="card">
+  <h2>已設定的列印機</h2>
+  <ul>
+    {% for printer in printer_choices %}
+    <li>
+      <strong>{{ printer.label }}</strong>
+      <span class="tag">{{ printer.value }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+
+<section class="card">
+  <h2>使用教程</h2>
+  <ol>
+    <li>點擊上方 <strong>立即更新數據</strong> 按鈕，系統將自動從列印機抓取最新日誌 (需連接校內網路)。</li>
+    <li>點擊 <strong>查看用戶統計</strong> 可檢視每位用戶的累積張數、配額使用狀況。</li>
+    <li>點擊 <strong>查看列印紀錄</strong> 可查詢詳細的每一筆列印/影印工作紀錄。</li>
+    <li>點擊 <strong>查看主要使用者</strong> 可快速找出印量最高的前幾名用戶。</li>
+    <li>在各個報表頁面中，點擊右下角的 <strong>Excel 匯出</strong> 按鈕即可下載報表。</li>
+  </ol>
+  <p style="margin-top: 1rem; font-size: 0.95rem; color: #666;">
+    提示：若發現數據未更新，請確認是否已點擊更新按鈕並等待執行完成。
+  </p>
+</section>
+
+
+<!-- Progress Modal -->
+<div id="progress-modal" class="modal-overlay" style="display: none;">
+  <div class="modal-content">
+    <h3 style="margin-top: 0; color: #b91c1c;"><i class="fas fa-exclamation-triangle"></i> 正在更新數據...</h3>
+    <p style="font-weight: bold;">請勿關閉此視窗，否則可能導致數據遺失！</p>
+
+    <div class="progress-container">
+      <div id="progress-bar" class="progress-bar">0%</div>
+    </div>
+
+    <div id="status-text" style="margin-bottom: 0.5rem; font-weight: 500;">準備中...</div>
+    <div id="log-output" class="log-area"></div>
+
+    <div style="margin-top: 1.5rem; text-align: right;">
+      <button id="close-modal-btn" class="btn" style="background: #6b7280; display: none;">關閉</button>
+    </div>
+  </div>
+</div>
+
+<style>
+  /* Modal Styles */
+  .modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+    justify-content: center;
+    align-items: center;
+  }
+
+  .modal-content {
+    background: #fff;
+    padding: 2rem;
+    border-radius: 12px;
+    width: 90%;
+    max-width: 500px;
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  }
+
+  .progress-container {
+    width: 100%;
+    background-color: #e5e7eb;
+    border-radius: 9999px;
+    height: 1.5rem;
+    overflow: hidden;
+    margin: 1.5rem 0;
+  }
+
+  .progress-bar {
+    height: 100%;
+    background-color: #2563eb;
+    width: 0%;
+    transition: width 0.3s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+
+  .log-area {
+    background: #1f2937;
+    color: #e5e7eb;
+    padding: 1rem;
+    border-radius: 8px;
+    height: 150px;
+    overflow-y: auto;
+    font-family: monospace;
+    font-size: 0.85rem;
+    margin-top: 1rem;
+  }
+</style>
+
+<script>
+  document.getElementById('update-btn').addEventListener('click', function () {
+    const modal = document.getElementById('progress-modal');
+    const progressBar = document.getElementById('progress-bar');
+    const statusText = document.getElementById('status-text');
+    const logOutput = document.getElementById('log-output');
+    const closeBtn = document.getElementById('close-modal-btn');
+
+    // Reset state
+    modal.style.display = 'flex';
+    progressBar.style.width = '0%';
+    progressBar.innerText = '0%';
+    logOutput.innerHTML = '';
+    closeBtn.style.display = 'none';
+
+    // Simulation config
+    let progress = 0;
+    const targetDuration = 600 * 1000; // 10 minutes (600 seconds)
+    const intervalTime = 500; // Update every 500ms
+    const steps = targetDuration / intervalTime;
+    const increment = 98 / steps; // Aim for 98% in 600s
+
+    const timer = setInterval(() => {
+      if (progress < 98) {
+        progress += increment;
+        if (progress > 98) progress = 98;
+        const rounded = Math.floor(progress);
+        progressBar.style.width = rounded + '%';
+        progressBar.innerText = rounded + '%';
+      }
+    }, intervalTime);
+
+    // Prevent closing
+    window.onbeforeunload = function () {
+      return "數據更新中，確定要離開嗎？";
+    };
+
+    const es = new EventSource('/update_data');
+
+    es.onmessage = function (event) {
+      const data = JSON.parse(event.data);
+
+      if (data.status === 'start') {
+        statusText.innerText = data.message;
+      } else if (data.status === 'progress') {
+        statusText.innerText = data.message;
+        // Backend progress events just update text, don't jump the bar to avoid jerkiness
+        // unless necessary. We rely on the simulation for the main visual.
+
+        const p = document.createElement('div');
+        p.innerText = '> ' + data.message;
+        p.style.color = '#60a5fa';
+        logOutput.appendChild(p);
+        logOutput.scrollTop = logOutput.scrollHeight;
+
+      } else if (data.status === 'log') {
+        const p = document.createElement('div');
+        p.innerText = data.message;
+        logOutput.appendChild(p);
+        logOutput.scrollTop = logOutput.scrollHeight;
+
+      } else if (data.status === 'done') {
+        clearInterval(timer); // Stop simulation
+        es.close();
+        window.onbeforeunload = null;
+
+        // Force 100%
+        progressBar.style.width = '100%';
+        progressBar.innerText = '100%';
+        progressBar.style.backgroundColor = '#059669';
+        statusText.innerText = data.message;
+        closeBtn.style.display = 'inline-block';
+        alert(data.message);
+
+      } else if (data.status === 'error') {
+        clearInterval(timer);
+        es.close();
+        window.onbeforeunload = null;
+        progressBar.style.backgroundColor = '#dc2626';
+        statusText.innerText = "錯誤: " + data.message;
+        statusText.style.color = '#dc2626';
+        closeBtn.style.display = 'inline-block';
+        alert(data.message);
+      }
+    };
+
+    es.onerror = function () {
+      clearInterval(timer);
+      es.close();
+      window.onbeforeunload = null;
+      statusText.innerText = "連線中斷或發生錯誤";
+      closeBtn.style.display = 'inline-block';
+    };
+
+    closeBtn.onclick = function () {
+      modal.style.display = 'none';
+      location.reload(); // Reload to reflect new data
+    };
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,5 @@
+__pycache__/
+exports/
+*.pyc
+*.pyo
+.git/

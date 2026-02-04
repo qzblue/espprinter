@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*$py.class
+exports/
+*.csv
+*.xlsx
+.env
+.venv
+env/
+venv/
+.idea/
+.vscode/
