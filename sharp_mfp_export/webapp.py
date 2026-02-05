@@ -1010,11 +1010,14 @@ def index():
             
             offset = (page - 1) * per_page
             
-            # Fetch paginated logs
-            cursor.execute("SELECT * FROM update_logs ORDER BY id DESC LIMIT %s OFFSET %s", (per_page, offset))
+            # Fetch paginated logs (Construct SQL manually to avoid LIMIT '5' syntax error)
+            sql = f"SELECT * FROM update_logs ORDER BY id DESC LIMIT {int(per_page)} OFFSET {int(offset)}"
+            cursor.execute(sql)
             logs = cursor.fetchall()
         conn.close()
-    except Exception:
+    except Exception as e:
+        import logging
+        logging.error(f"Failed to fetch logs: {e}")
         pass # Fail gracefully if DB not ready
         
     return render_template("index.html", 
