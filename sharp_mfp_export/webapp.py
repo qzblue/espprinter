@@ -986,18 +986,42 @@ def _build_leaders_workbook(results: List[Dict[str, Any]], aggregated: Optional[
 @app.route("/")
 def index():
     # Fetch recent update logs (top 5) for dashboard
+    # Fetch recent update logs (paginated)
     import sharp_mfp_export
+    import math
+    
+    page = request.args.get('log_page', 1, type=int)
+    per_page = 5
     logs = []
+    total_logs = 0
+    total_pages = 0
+    
     try:
         conn = sharp_mfp_export.get_db_connection()
         with conn.cursor() as cursor:
-            cursor.execute("SELECT * FROM update_logs ORDER BY id DESC LIMIT 5")
+            # Get total count
+            cursor.execute("SELECT COUNT(*) FROM update_logs")
+            total_logs = cursor.fetchone()[0]
+            
+            # Calculate offset
+            total_pages = math.ceil(total_logs / per_page)
+            if page < 1: page = 1
+            if page > total_pages and total_pages > 0: page = total_pages
+            
+            offset = (page - 1) * per_page
+            
+            # Fetch paginated logs
+            cursor.execute("SELECT * FROM update_logs ORDER BY id DESC LIMIT %s OFFSET %s", (per_page, offset))
             logs = cursor.fetchall()
         conn.close()
     except Exception:
         pass # Fail gracefully if DB not ready
         
-    return render_template("index.html", printer_choices=PRINTER_CHOICES, logs=logs)
+    return render_template("index.html", 
+                         printer_choices=PRINTER_CHOICES, 
+                         logs=logs,
+                         current_page=page,
+                         total_pages=total_pages)
 
 
 @app.route("/counts")

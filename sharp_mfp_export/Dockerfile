@@ -12,7 +12,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Environment variables (Defaults, override in K8s)
-ENV SHARP_PRINTERS="http://10.64.48.120,http://10.96.48.109,http://10.32.48.155"
+ENV SHARP_PRINTERS="http://10.64.48.120,http://10.96.48.109,http://10.32.48.155,http://10.32.48.154"
 ENV DB_HOST="10.32.65.22"
 ENV DB_USER="printer"
 ENV DB_PASS="HDtAHFahLsdkNazm"

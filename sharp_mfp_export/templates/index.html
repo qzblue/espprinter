@@ -129,6 +129,22 @@
       {% endfor %}
     </tbody>
   </table>
+
+  <!-- Logs Pagination -->
+  {% if total_pages > 1 %}
+  <div style="margin-top: 1rem; text-align: center;">
+    {% if current_page > 1 %}
+    <a href="{{ url_for('index', log_page=current_page-1) }}" class="btn"
+      style="background-color: #e5e7eb; color: #374151; padding: 0.4rem 0.8rem; font-size: 0.85rem;">上一頁</a>
+    {% endif %}
+
+    <span style="margin: 0 10px; color: #666; font-size: 0.9rem;">第 {{ current_page }} / {{ total_pages }} 頁</span>
+
+    {% if current_page < total_pages %} <a href="{{ url_for('index', log_page=current_page+1) }}" class="btn"
+      style="background-color: #e5e7eb; color: #374151; padding: 0.4rem 0.8rem; font-size: 0.85rem;">下一頁</a>
+      {% endif %}
+  </div>
+  {% endif %}
 </section>
 
 <!-- Progress Modal -->
