@@ -28,7 +28,8 @@ else:
     PRINTERS = [
         "http://10.64.48.120",
         "http://10.96.48.109",
-        "http://10.32.48.155"
+        "http://10.32.48.155",
+        "http://10.32.48.154"
     ]
 
 # 列印機別名 (可根據 IP 顯示易讀名稱)
@@ -55,6 +56,22 @@ DB_CONFIG = {
 
 def get_db_connection():
     return pymysql.connect(**DB_CONFIG)
+
+
+def log_update(success: bool, message: str) -> None:
+    """Log the update result to the database."""
+    status = "success" if success else "failed"
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO update_logs (trigger_source, status, message) VALUES (%s, %s, %s)",
+                ("manual", status, message)
+            )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Failed to write to update_logs: {e}")
 
 def init_db():
     conn = get_db_connection()
@@ -919,6 +936,7 @@ def run_download_process(printers: Optional[List[str]] = None):
     ensure_dir(jl_dir)
 
     selected = printers or PRINTERS
+    errors = []
     for base in selected:
         yield f"== {base} =="
         client = SharpMFP(base, USERNAME, PASSWORD)
@@ -942,12 +960,24 @@ def run_download_process(printers: Optional[List[str]] = None):
                 yield f"DB Sync  : Inserted/Ignored {count} rows"
 
         except Exception as e:
+            err_msg = f"{base}: {e}"
+            errors.append(err_msg)
             yield f"FAIL: {e}"
 
         time.sleep(SLEEP_BETWEEN_PRINTERS)
     
+    
     # Run cleanup after all downloads
     cleanup_old_exports()
+
+    # Log overall result
+    if errors:
+        msg = "部分更新失敗: " + "; ".join(errors)
+        log_update(False, msg)
+        yield f"LOG: {msg}"
+    else:
+        log_update(True, "手動更新成功")
+        yield "LOG: 更新記錄已寫入資料庫"
 
 
 def download_exports(printers: Optional[List[str]] = None) -> None:

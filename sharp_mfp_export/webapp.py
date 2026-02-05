@@ -27,6 +27,8 @@ from sharp_mfp_export import (
     parse_month_range,
     parse_time_value,
     parse_week_range,
+    fetch_latest_user_counts,
+    fetch_aggregated_users_paginated,
     fetch_job_logs_by_users,
     host_tag,
     normalize_name,
@@ -533,6 +535,7 @@ def _prepare_counts_context(query: Dict[str, Any], export_mode: bool = False) ->
         # If printer_pick is "all", default to first printer
         if printer_pick == "all" and PRINTERS:
             printer_pick = PRINTERS[0]
+            query["printer"] = printer_pick # Sync back to query for UI
         
         if printer_pick != "all":
             # Fetch paginated users for selected printer

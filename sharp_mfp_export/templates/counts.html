@@ -16,7 +16,7 @@
     <label id="printer-selector">
       <span>列印機</span>
       <select name="printer">
-        <option value="all" {% if query.printer=="all" %}selected{% endif %}>全部</option>
+        {# "All" option removed as this selector is only for Single Printer view #}
         {% for printer in printer_choices %}
         <option value="{{ printer.value }}" {% if query.printer==printer.value %}selected{% endif %}>{{ printer.label }}
         </option>
