@@ -34,7 +34,14 @@ from sharp_mfp_export import (
     normalize_name,
 )
 
+import logging
 import ldap_service
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 app = Flask(__name__)
 
