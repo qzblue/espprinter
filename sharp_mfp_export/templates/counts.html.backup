@@ -1,0 +1,257 @@
+{% extends "base.html" #}
+
+{% block content #}
+<section class="card">
+  <h1>用戶列印統計</h1>
+  <p>依時間範圍與功能分類，統計各使用者在不同列印機的黑白 / 全彩張數�?/p>
+  <form method="get" class="form-grid">
+    <label>
+      <span>查看視圖</span>
+      <select name="view_mode" id="view-mode-select">
+        <option value="single_printer" {% if query.view_mode=="single_printer" #}selected{% endif #}>單台列印�?/option>
+        <option value="all_printers" {% if query.view_mode=="all_printers" #}selected{% endif #}>所有列印機</option>
+        <option value="aggregated" {% if query.view_mode=="aggregated" #}selected{% endif #}>跨列印機彙總</option>
+      </select>
+    </label>
+    <label id="printer-selector">
+      <span>列印�?/span>
+      <select name="printer">
+        <option value="all" {% if query.printer=="all" #}selected{% endif #}>全部</option>
+        {% for printer in printer_choices #}
+        <option value="{{ printer.value }}" {% if query.printer==printer.value #}selected{% endif #}>{{ printer.label }}
+        </option>
+        {% endfor #}
+      </select>
+    </label>
+    <label>
+      <span>用戶關鍵�?/span>
+      <input type="text" name="user" value="{{ query.user }}" placeholder="例如 psi" />
+    </label>
+    <label>
+      <span>時間範圍模式</span>
+      <select name="time_mode" class="time-mode-select">
+        <option value="all" {% if query.time_mode=="all" #}selected{% endif #}>全部資料</option>
+        <option value="month" {% if query.time_mode=="month" #}selected{% endif #}>指定月份</option>
+        <option value="week" {% if query.time_mode=="week" #}selected{% endif #}>指定�?/option>
+        <option value="custom" {% if query.time_mode=="custom" #}selected{% endif #}>自訂時間</option>
+      </select>
+    </label>
+    <label class="time-field" data-time-field="month">
+      <span>指定月份</span>
+      <input type="month" name="month" value="{{ query.month }}" autocomplete="off" />
+    </label>
+    <label class="time-field" data-time-field="week">
+      <span>指定�?(YYYY-Www)</span>
+      <input type="text" name="week" value="{{ query.week }}" placeholder="2026-W05" autocomplete="off" />
+    </label>
+    <label class="time-field" data-time-field="custom">
+      <span>開始時間</span>
+      <input type="datetime-local" name="start" value="{{ query.start }}" autocomplete="off" />
+    </label>
+    <label class="time-field" data-time-field="custom">
+      <span>結束時間</span>
+      <input type="datetime-local" name="end" value="{{ query.end }}" autocomplete="off" />
+    </label>
+    <label>
+      <span>每頁顯示</span>
+      <select name="per_page">
+        <option value="10" {% if query.per_page=="10" #}selected{% endif #}>10</option>
+        <option value="20" {% if query.per_page=="20" #}selected{% endif #}>20</option>
+        <option value="30" {% if query.per_page=="30" #}selected{% endif #}>30</option>
+        <option value="50" {% if query.per_page=="50" #}selected{% endif #}>50</option>
+        <option value="100" {% if query.per_page=="100" #}selected{% endif #}>100</option>
+      </select>
+    </label>
+    <div style="grid-column: 1 / -1">
+      <span style="font-weight: 600; display: block; margin-bottom: 0.5rem">統計分類 (可多�?</span>
+      <div style="display: flex; flex-wrap: wrap; gap: 0.5rem 1rem">
+        {% for cat in category_choices #}
+        <label style="display: flex; align-items: center; gap: 0.35rem">
+          <input type="checkbox" name="category" value="{{ cat.value }}" {% if cat.value in selected_categories
+            #}checked{% endif #} />
+          <span>{{ cat.label }}</span>
+        </label>
+        {% endfor #}
+      </div>
+    </div>
+    <div style="grid-column: 1 / -1; display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center">
+      <button type="submit">套用篩選</button>
+      <label style="display: flex; align-items: center; gap: 0.5rem; margin: 0">
+        <span>導出範圍:</span>
+        <select id="export-scope-select" style="margin: 0">
+          <option value="filtered">當前篩選{% if pagination #} ({{ pagination.total_users }} 位用�?{% endif #}</option>
+          <option value="all">全部資料</option>
+        </select>
+      </label>
+      <button type="button" class="btn" id="export-btn">導出 Excel</button>
+    </div>
+  </form>
+</section>
+
+{% if errors #}
+<section class="card error">
+  {% for err in errors #}
+  <div>{{ err }}</div>
+  {% endfor #}
+</section>
+{% endif #}
+
+{% if query.view_mode == "single_printer" #}
+{# Single Printer View: Display one printer's data #}
+{% for block in results #}
+<section class="card">
+  <h2>{{ block.label }} <span class="tag">{{ block.printer }}</span></h2>
+  {% if block.error #}
+  <div class="error">{{ block.error }}</div>
+  {% else #}
+  <p>使用匯出：{{ block.file_name }}，顯�?{{ block.entries | length }} 筆�?/p>
+  <table>
+    <thead>
+      <tr>
+        <th>用戶名稱</th>
+        {% for col in category_columns #}
+        <th>{{ col.label }}</th>
+        {% endfor #}
+        <th>總張�?/th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in block.entries #}
+      <tr>
+        <td>{{ item.name | user_display_name }}</td>
+        {% for col in category_columns #}
+        <td>{{ item.category_map[col.key] if col.key in item.category_map else 0 }}</td>
+        {% endfor #}
+        <td>{{ item.total }}</td>
+      </tr>
+      {% endfor #}
+    </tbody>
+  </table>
+  {% endif #}
+</section>
+{% endfor #}
+
+{% elif query.view_mode == "all_printers" #}
+{# All Printers View: Unified table with printer column #}
+<section class="card">
+  <h2>所有列印機統計</h2>
+  {% if results #}
+  <p>顯示 {{ results | length }} 筆資�?/p>
+  <table>
+    <thead>
+      <tr>
+        <th>用戶名稱</th>
+        {% for col in category_columns #}
+        <th>{{ col.label }}</th>
+        {% endfor #}
+        <th>總張�?/th>
+        <th>列印�?/th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in results #}
+      <tr>
+        <td>{{ item.name | user_display_name }}</td>
+        {% for col in category_columns #}
+        <td>{{ item.category_map[col.key] if col.key in item.category_map else 0 }}</td>
+        {% endfor #}
+        <td>{{ item.total }}</td>
+        <td>{{ item.printer | printer_label }}</td>
+      </tr>
+      {% endfor #}
+    </tbody>
+  </table>
+  {% else #}
+  <div class="error">沒有符合的紀錄�?/div>
+  {% endif #}
+</section>
+
+{% elif query.view_mode == "aggregated" #}
+{# Aggregated View: Cross-printer user totals #}
+{% if aggregated and aggregated.entries #}
+<section class="card">
+  <h2>跨列印機彙總</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>用戶名稱</th>
+        {% for col in category_columns #}
+        <th>{{ col.label }}</th>
+        {% endfor #}
+        <th>總張�?/th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in aggregated.entries #}
+      <tr>
+        <td>{{ item.name | user_display_name }}</td>
+        {% for col in category_columns #}
+        <td>{{ item.category_map[col.key] if col.key in item.category_map else 0 }}</td>
+        {% endfor #}
+        <td>{{ item.total }}</td>
+      </tr>
+      {% endfor #}
+    </tbody>
+  </table>
+</section>
+{% else #}
+<section class="card error">
+  <div>查無跨機器資料�?/div>
+</section>
+{% endif #}
+{% endif #}
+
+
+{% if pagination and pagination.total_pages > 1 #}
+<div style="display: flex; justify-content: center; gap: 1rem; margin-top: 1rem; align-items: center;">
+  {% if pagination.has_prev #}
+  <a class="btn"
+    href="{{ url_for('counts', page=pagination.prev_num, per_page=pagination.per_page, printer=query.printer, user=query.user, time_mode=query.time_mode, month=query.month, week=query.week, start=query.start, end=query.end, category=query.categories, view_mode=query.view_mode) }}">上一�?/a>
+  {% else #}
+  <button class="btn" disabled style="background: #ccc; cursor: not-allowed">上一�?/button>
+  {% endif #}
+
+  <span>�?{{ pagination.page }} �?/ �?{{ pagination.total_pages }} �?({{ pagination.total_users }} 位用�?</span>
+
+  {% if pagination.has_next #}
+  <a class="btn"
+    href="{{ url_for('counts', page=pagination.next_num, per_page=pagination.per_page, printer=query.printer, user=query.user, time_mode=query.time_mode, month=query.month, week=query.week, start=query.start, end=query.end, category=query.categories) }}">下一�?/a>
+  {% else #}
+  <button class="btn" disabled style="background: #ccc; cursor: not-allowed">下一�?/button>
+  {% endif #}
+</div>
+{% endif #}
+
+{% endif #}
+
+<script>
+  // View Mode Control: Show/hide printer selector based on view mode
+  document.addEventListener('DOMContentLoaded', function () {
+    const viewModeSelect = document.getElementById('view-mode-select');
+    const printerSelector = document.getElementById('printer-selector');
+
+    function updatePrinterSelectorVisibility() {
+      const viewMode = viewModeSelect.value;
+      if (viewMode === 'single_printer') {
+        printerSelector.style.display = 'block';
+      } else {
+        printerSelector.style.display = 'none';
+      }
+    }
+
+    viewModeSelect.addEventListener('change', updatePrinterSelectorVisibility);
+    updatePrinterSelectorVisibility(); // Initialize on load
+
+    // Export button handler
+    const exportBtn = document.getElementById('export-btn');
+    const exportScopeSelect = document.getElementById('export-scope-select');
+
+    exportBtn.addEventListener('click', function () {
+      const scope = exportScopeSelect.value;
+      const params = new URLSearchParams(window.location.search);
+      params.set('export_scope', scope);
+      window.location.href = '/export/stats?' + params.toString();
+    });
+  });
+</script>
+{% endblock #}

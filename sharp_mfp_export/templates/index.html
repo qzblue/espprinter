@@ -30,17 +30,106 @@
 <section class="card">
   <h2>使用教程</h2>
   <ol>
-    <li>點擊上方 <strong>立即更新數據</strong> 按鈕，系統將自動從列印機抓取最新日誌 (需連接校內網路)。</li>
-    <li>點擊 <strong>查看用戶統計</strong> 可檢視每位用戶的累積張數、配額使用狀況。</li>
-    <li>點擊 <strong>查看列印紀錄</strong> 可查詢詳細的每一筆列印/影印工作紀錄。</li>
-    <li>點擊 <strong>查看主要使用者</strong> 可快速找出印量最高的前幾名用戶。</li>
-    <li>在各個報表頁面中，點擊右下角的 <strong>Excel 匯出</strong> 按鈕即可下載報表。</li>
+    <li><strong>自動更新機制</strong>：系統會在<strong>每天下午 6 點</strong>自動抓取最新數據，通常情況下無需手動操作。</li>
+    <li><strong>手動更新 (Fallback)</strong>：僅在自動更新失敗或數據異常時才需使用上方按鈕手動更新。此操作需要授權密碼，請洽詢<strong>教學資訊科技部</strong>。</li>
+    <li><strong>功能介紹</strong>：
+      <ul>
+        <li><a href="{{ url_for('counts') }}">查看用戶統計</a>：檢視每位用戶的累積張數與配額使用狀況。</li>
+        <li><a href="{{ url_for('jobs') }}">查看列印紀錄</a>：查詢詳細的列印/影印工作流水帳。</li>
+        <li><a href="{{ url_for('leaders') }}">查看主要使用者</a>：快速統計印量最高的前幾名用戶。</li>
+      </ul>
+    </li>
+    <li><strong>數據匯出</strong>：在所有報表頁面的右下角，均可點擊 <strong>Excel 匯出</strong> 下載當前報表。</li>
   </ol>
   <p style="margin-top: 1rem; font-size: 0.95rem; color: #666;">
-    提示：若發現數據未更新，請確認是否已點擊更新按鈕並等待執行完成。
+    <i class="fas fa-info-circle"></i> 提示：若發現今日數據尚未更新，請先檢查下方的「最近更新紀錄」。
   </p>
 </section>
 
+
+
+<section class="card">
+  <h2>最近更新紀錄</h2>
+  <style>
+    .log-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 0.5rem;
+      font-size: 0.9rem;
+    }
+
+    .log-table th,
+    .log-table td {
+      padding: 0.5rem;
+      text-align: left;
+      border-bottom: 1px solid #f3f4f6;
+    }
+
+    .log-table th {
+      color: #6b7280;
+      font-weight: 500;
+      font-size: 0.85rem;
+    }
+
+    .badge {
+      padding: 0.1rem 0.4rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      display: inline-block;
+    }
+
+    .badge.success {
+      color: #059669;
+      background: #ecfdf5;
+    }
+
+    .badge.error {
+      color: #dc2626;
+      background: #fef2f2;
+    }
+
+    .badge.running {
+      color: #d97706;
+      background: #fffbeb;
+    }
+  </style>
+  <table class="log-table">
+    <thead>
+      <tr>
+        <th>時間</th>
+        <th>來源</th>
+        <th>狀態</th>
+        <th>訊息</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for log in logs %}
+      <tr>
+        <td style="color: #374151;">{{ log.start_time.strftime('%m-%d %H:%M') }}</td>
+        <td>
+          <span style="color: #6b7280; font-size: 0.85rem;">
+            {{ '自動排程' if log.trigger_source == 'auto' else '手動更新' }}
+          </span>
+        </td>
+        <td>
+          {% if log.status == 'success' %}
+          <span class="badge success">成功</span>
+          {% elif log.status == 'error' %}
+          <span class="badge error">失敗</span>
+          {% else %}
+          <span class="badge running">執行中</span>
+          {% endif %}
+        </td>
+        <td style="color: #4b5563;">{{ log.message }}</td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="4" style="text-align: center; color: #9ca3af; padding: 1rem;">暫無更新紀錄</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
 
 <!-- Progress Modal -->
 <div id="progress-modal" class="modal-overlay" style="display: none;">

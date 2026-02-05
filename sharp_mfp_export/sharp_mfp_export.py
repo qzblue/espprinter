@@ -5,6 +5,7 @@ import argparse
 import csv
 import os
 import re
+import sys
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -99,10 +100,25 @@ def init_db():
                 try:
                     cursor.execute(asql)
                 except Exception:
-                    # Ignore if column exists or not supported (IF NOT EXISTS is MariaDB/MySQL 5.7+)
-                    # Use standard try-except for robust migration
+                    # Ignore if column exists
                     pass
             
+            # Explicitly check and add columns if missing (Robust check)
+            cursor.execute("SHOW COLUMNS FROM job_logs")
+            existing_cols = {row['Field'] for row in cursor.fetchall()}
+            
+            robust_adds = []
+            if 'file_name' not in existing_cols: robust_adds.append("ADD COLUMN file_name VARCHAR(255)")
+            if 'scan_type' not in existing_cols: robust_adds.append("ADD COLUMN scan_type VARCHAR(100)")
+            if 'destination' not in existing_cols: robust_adds.append("ADD COLUMN destination VARCHAR(255)")
+            
+            for stmt in robust_adds:
+                try:
+                    cursor.execute(f"ALTER TABLE job_logs {stmt}")
+                except Exception as e:
+                    print(f"Schema update error: {e}")
+            
+            # User Count Table
             # User Count Table
             sql_uc = """
             CREATE TABLE IF NOT EXISTS user_counts (
@@ -120,6 +136,20 @@ def init_db():
             );
             """
             cursor.execute(sql_uc)
+            
+            # Update Logs Table
+            sql_log = """
+            CREATE TABLE IF NOT EXISTS update_logs (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                trigger_source VARCHAR(20) NOT NULL,
+                status VARCHAR(20) NOT NULL,
+                start_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+                end_time DATETIME,
+                message TEXT,
+                INDEX idx_start_time (start_time)
+            );
+            """
+            cursor.execute(sql_log)
     finally:
         conn.close()
 
@@ -331,7 +361,8 @@ def _build_job_logs_where_clause(
     mode_kw: Optional[str] = None,
     computer_kw: Optional[str] = None,
     start_dt: Optional[datetime] = None,
-    end_dt: Optional[datetime] = None
+    end_dt: Optional[datetime] = None,
+    filename_kw: Optional[str] = None
 ) -> Tuple[str, List[Any]]:
     sql = " WHERE 1=1"
     params = []
@@ -366,6 +397,11 @@ def _build_job_logs_where_clause(
     if computer_kw:
         sql += " AND computer_name LIKE %s"
         params.append(f"%{computer_kw}%")
+    
+    if filename_kw:
+        sql += " AND (file_name LIKE %s OR scan_type LIKE %s OR destination LIKE %s)"
+        kw = f"%{filename_kw}%"
+        params.extend([kw, kw, kw])
         
     if start_dt:
         sql += " AND start_time >= %s"
@@ -386,7 +422,8 @@ def fetch_aggregated_users_paginated(
     mode_kw: Optional[str] = None,
     computer_kw: Optional[str] = None,
     start_dt: Optional[datetime] = None,
-    end_dt: Optional[datetime] = None
+    end_dt: Optional[datetime] = None,
+    filename_kw: Optional[str] = None
 ) -> Tuple[List[Dict[str, str]], int]:
     """
     Returns (user_list, total_users).
@@ -397,7 +434,7 @@ def fetch_aggregated_users_paginated(
     try:
         with conn.cursor() as cursor:
             where_sql, params = _build_job_logs_where_clause(
-                printer_addr, user_kw, mode_kw, computer_kw, start_dt, end_dt
+                printer_addr, user_kw, mode_kw, computer_kw, start_dt, end_dt, filename_kw
             )
             
             # Count total unique users
@@ -445,7 +482,8 @@ def fetch_job_logs_by_users(
     mode_kw: Optional[str] = None,
     computer_kw: Optional[str] = None,
     start_dt: Optional[datetime] = None,
-    end_dt: Optional[datetime] = None
+    end_dt: Optional[datetime] = None,
+    filename_kw: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """Fetch all logs for specific users (for the current page view)."""
     if not users:
@@ -456,7 +494,7 @@ def fetch_job_logs_by_users(
         with conn.cursor() as cursor:
             # Build base WHERE from filters (skipping user_kw as we filter by specific users)
             where_sql, params = _build_job_logs_where_clause(
-                printer_addr, None, mode_kw, computer_kw, start_dt, end_dt
+                printer_addr, None, mode_kw, computer_kw, start_dt, end_dt, filename_kw
             )
             
             # Add user list filter
@@ -820,7 +858,7 @@ class SharpMFP:
 
 
 def cleanup_old_exports() -> None:
-    """每個分類、每台機器只保留最新的 2 個檔案"""
+    """每個分類, 每台機器只保留最新的 2 個檔案"""
     for kind in ["usercount", "joblog"]:
         directory = OUT_DIR / kind
         if not directory.exists():
@@ -1436,8 +1474,49 @@ def aggregate_usage_by_categories(
     return stats
 
 
+def log_update_event(source: str, status: str, message: str, log_id: int = 0) -> int:
+    """
+    Log an update event to DB.
+    If log_id is 0, creates a new record (start).
+    If log_id > 0, updates the existing record (end).
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            if log_id == 0:
+                # Start new log
+                sql = "INSERT INTO update_logs (trigger_source, status, message, start_time) VALUES (%s, %s, %s, NOW())"
+                cursor.execute(sql, (source, status, message))
+                lid = cursor.lastrowid
+                print(f"DEBUG: Log Inserted ID={lid}")
+                return lid
+            else:
+                # Update existing log
+                print(f"DEBUG: Updating Log ID={log_id} to {status}")
+                sql = "UPDATE update_logs SET status=%s, message=%s, end_time=NOW() WHERE id=%s"
+                cursor.execute(sql, (status, message, log_id))
+                return log_id
+    except Exception as e:
+        print(f"Logging failed: {e}")
+        return 0
+    finally:
+        conn.close()
+
+
 def cmd_download(args: argparse.Namespace) -> None:
-    download_exports(resolve_printers(args.printer))
+    source = getattr(args, "source", "manual")
+    log_id = log_update_event(source, "running", "開始下載更新...", 0)
+    print(f"DEBUG: cmd_download started with log_id={log_id}")
+    
+    try:
+        download_exports(resolve_printers(args.printer))
+        print("DEBUG: download_exports finished, updating log...")
+        log_update_event(source, "success", "更新成功完成", log_id)
+        print("DEBUG: log updated to success")
+    except Exception as e:
+        print(f"DEBUG: download_exports failed: {e}")
+        log_update_event(source, "error", f"更新失敗: {str(e)}", log_id)
+        raise e
 
 
 def cmd_counts(args: argparse.Namespace) -> None:
@@ -1483,6 +1562,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     download_parser = sub.add_parser("download", help="下載 usercount 與 joblog 匯出檔")
     download_parser.add_argument("--printer", help="指定列印機 IP (逗號分隔)，預設 all", default="all")
+    download_parser.add_argument("--source", help="觸發來源 (manual/auto)", default="manual")
     download_parser.set_defaults(func=cmd_download)
 
     count_parser = sub.add_parser("counts", help="查詢用戶列印數量 (usercount)")
@@ -1520,6 +1600,16 @@ def main():
 
 
 if __name__ == "__main__":
+    # Force UTF-8 output for Windows
+    if sys.stdout.encoding.lower() != 'utf-8':
+        try:
+            sys.stdout.reconfigure(encoding='utf-8')
+        except AttributeError:
+            # Python < 3.7
+            import codecs
+            sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer)
+            
+    init_db()  # Ensure DB schema is up-to-date
     main()
 
 PRINTER_ALIASES = {

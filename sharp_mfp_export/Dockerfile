@@ -1,33 +1,24 @@
-# 使用輕量級 Python 3.11 映像
-FROM python:3.11-slim
+FROM python:3.9-slim
 
-# 設定工作目錄
 WORKDIR /app
 
-# 安裝系統依賴 (如果需要的話，但這裏主要是為了 timezone)
-# 設置時區為 澳門/台北 時間 (Asia/Macau)
-RUN apt-get update && apt-get install -y tzdata && \
-    ln -sf /usr/share/zoneinfo/Asia/Macau /etc/localtime && \
-    echo "Asia/Macau" > /etc/timezone && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
-
-# 複製依賴文件
+# Install dependencies
 COPY requirements.txt .
+# If requirements.txt doesn't exist, we install manually (fallback)
+RUN pip install --no-cache-dir flask waitress pymysql requests openpyxl flask-caching
 
-# 安裝 Python 依賴
-RUN pip install --no-cache-dir -r requirements.txt
-
-# 複製應用程序代碼
+# Copy app code
 COPY . .
 
-# 創建 export 目錄
-RUN mkdir -p /app/exports
+# Environment variables (Defaults, override in K8s)
+ENV SHARP_PRINTERS="http://10.64.48.120,http://10.96.48.109,http://10.32.48.155"
+ENV DB_HOST="10.32.65.22"
+ENV DB_USER="printer"
+ENV DB_PASS="HDtAHFahLsdkNazm"
+ENV DB_NAME="printer"
 
-# 暴露端口 5000
+# Expose port
 EXPOSE 5000
 
-# 啟動應用
-CMD ["gunicorn", "-w", "1", "-k", "gthread", "--threads", "8", "-b", "0.0.0.0:5000", "webapp:app"]
-
-
+# Run with Waitress
+CMD ["python", "webapp.py"]

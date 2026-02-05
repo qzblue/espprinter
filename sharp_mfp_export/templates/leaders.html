@@ -148,6 +148,27 @@
       {% endfor %}
     </tbody>
   </table>
+
+  {% if pagination and pagination.total_pages > 1 %}
+  <div style="display: flex; justify-content: center; gap: 1rem; margin-top: 1rem; align-items: center;">
+    {% if pagination.has_prev %}
+    <a class="btn"
+      href="{{ url_for('leaders', page=pagination.prev_num, per_page=pagination.per_page, printer=query.printer, user=query.user, mode=query.mode, computer=query.computer, time_mode=query.time_mode, month=query.month, week=query.week, start=query.start, end=query.end) }}">上一頁</a>
+    {% else %}
+    <button class="btn" disabled style="background: #ccc; cursor: not-allowed">上一頁</button>
+    {% endif %}
+
+    <span>第 {{ pagination.page }} 頁 / 共 {{ pagination.total_pages }} 頁 ({{ pagination.total_users }} 人)</span>
+
+    {% if pagination.has_next %}
+    <a class="btn"
+      href="{{ url_for('leaders', page=pagination.next_num, per_page=pagination.per_page, printer=query.printer, user=query.user, mode=query.mode, computer=query.computer, time_mode=query.time_mode, month=query.month, week=query.week, start=query.start, end=query.end) }}">下一頁</a>
+    {% else %}
+    <button class="btn" disabled style="background: #ccc; cursor: not-allowed">下一頁</button>
+    {% endif %}
+  </div>
+  {% endif %}
+
 </section>
 {% endif %}
 {% endblock %}

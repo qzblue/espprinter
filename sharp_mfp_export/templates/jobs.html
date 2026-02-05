@@ -20,6 +20,10 @@
       <input type="text" name="user" value="{{ query.user }}" placeholder="例如zzy或朱振宇" />
     </label>
     <label>
+      <span>檔案 / 掃描關鍵字</span>
+      <input type="text" name="filename" value="{{ query.filename }}" placeholder="例如 .pdf" />
+    </label>
+    <label>
       <span>工作模式</span>
       <select name="mode">
         <option value="" {% if not query.mode %}selected{% endif %}>全部</option>

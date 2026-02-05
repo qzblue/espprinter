@@ -118,10 +118,15 @@ def update_data():
             return
 
         try:
+            import os
+            env = os.environ.copy()
+            env["PYTHONIOENCODING"] = "utf-8"
+            
             process = subprocess.Popen(
-                ["python", "-u",  "sharp_mfp_export.py", "download"],
+                ["python", "-u",  "sharp_mfp_export.py", "download", "--source", "manual"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
+                env=env,
                 text=True,
                 bufsize=1,
                 encoding="utf-8",
@@ -216,8 +221,10 @@ def _resolve_time_range_from_query(
         start_dt = _parse_query_datetime(start_raw, "開始時間", errors)
         end_dt = _parse_query_datetime(end_raw, "結束時間", errors)
         if start_dt and end_dt and end_dt < start_dt:
-            errors.append("結束時間需晚於開始時間")
-            return None, None
+            # Smart fix: auto-swap if start > end
+            start_dt, end_dt = end_dt, start_dt
+            # errors.append("結束時間需晚於開始時間")
+            # return None, None
         return start_dt, end_dt
 
     return None, None
@@ -297,6 +304,7 @@ def _build_jobs_query() -> Dict[str, Any]:
         "user": request.args.get("user", "").strip(),
         "mode": request.args.get("mode", "").strip(),
         "computer": request.args.get("computer", "").strip(),
+        "filename": request.args.get("filename", "").strip(),
         "time_mode": time_mode,
         "month": month,
         "week": week,
@@ -333,6 +341,7 @@ def _prepare_jobs_context(query_args: Dict[str, str]) -> Dict[str, Any]:
     printer_pick = query_args.get("printer", "all")
     mode_pick = query_args.get("mode", "").strip()
     computer_pick = query_args.get("computer", "").strip()
+    filename_pick = query_args.get("filename", "").strip()
     time_mode = query_args.get("time_mode", "all")
 
     # Time range
@@ -362,12 +371,13 @@ def _prepare_jobs_context(query_args: Dict[str, str]) -> Dict[str, Any]:
         mode_kw=mode_pick,
         computer_kw=computer_pick,
         start_dt=start_dt,
-        end_dt=end_dt
+        end_dt=end_dt,
+        filename_kw=filename_pick
     )
 
     if not users_list:
         errors = []
-        if user_kw or mode_display:
+        if user_kw or mode_display or filename_pick:
             errors = ["查無符合條件的資料。"]
         return {
             "query": query_args,
@@ -389,7 +399,8 @@ def _prepare_jobs_context(query_args: Dict[str, str]) -> Dict[str, Any]:
         mode_kw=mode_pick,
         computer_kw=computer_pick,
         start_dt=start_dt,
-        end_dt=end_dt
+        end_dt=end_dt,
+        filename_kw=filename_pick
     )
     
     # 3. Aggregate into report format
@@ -729,12 +740,21 @@ def _build_leaders_query() -> Dict[str, Any]:
         "end": request.args.get("end", "").strip(),
         "limit": request.args.get("limit", "10"),
         "summary_limit": request.args.get("summary_limit", "20"),
+        "page": request.args.get("page", "1"),
+        "per_page": request.args.get("per_page", "20"),
     }
 
 
 def _prepare_leaders_context(query: Dict[str, Any]) -> Dict[str, Any]:
     limit = _to_int(query["limit"], 10)
     summary_limit = _to_int(query["summary_limit"], 20)
+    
+    # Pagination for aggregated list
+    page = _to_int(query["page"], 1)
+    if page < 1: page = 1
+    per_page = _to_int(query["per_page"], 20)
+    if per_page < 5: per_page = 5
+    
     errors: List[str] = []
     start_dt, end_dt = _resolve_time_range_from_query(
         query["time_mode"], query["month"], query["week"], query["start"], query["end"], errors
@@ -766,16 +786,46 @@ def _prepare_leaders_context(query: Dict[str, Any]) -> Dict[str, Any]:
             }
         )
 
-    aggregated = None
+    # Pagination logic specifically for the aggregated list
+    pagination = None
     if reports:
         summary = aggregate_joblog_reports(list(reports.values()))
         if summary:
             users = summary["users"]
-            if summary_limit > 0:
-                users = users[:summary_limit]
-            aggregated = {"totals": summary["totals"], "users": users}
+            total_users = len(users)
+            
+            # Use pagination params instead of summary_limit if page > 1 or per_page != default
+            # But keep summary_limit compatibility if page is unused?
+            # Actually, let's just use pagination for the aggregated view.
+            
+            start_idx = (page - 1) * per_page
+            end_idx = start_idx + per_page
+            
+            display_users = users[start_idx:end_idx]
+            
+            aggregated = {"totals": summary["totals"], "users": display_users}
+            
+            import math
+            total_pages_count = math.ceil(total_users / per_page) if per_page > 0 else 0
+            
+            pagination = {
+                "page": page,
+                "per_page": per_page,
+                "total_users": total_users,
+                "total_pages": total_pages_count,
+                "has_prev": page > 1,
+                "prev_num": page - 1,
+                "has_next": page < total_pages_count,
+                "next_num": page + 1
+            }
 
-    all_results = {"results": results, "errors": errors, "aggregated": aggregated, "reports": list(reports.values())}
+    all_results = {
+        "results": results, 
+        "errors": errors, 
+        "aggregated": aggregated, 
+        "reports": list(reports.values()),
+        "pagination": pagination
+    }
 
     return all_results
 
@@ -928,7 +978,19 @@ def _build_leaders_workbook(results: List[Dict[str, Any]], aggregated: Optional[
 
 @app.route("/")
 def index():
-    return render_template("index.html", printer_choices=PRINTER_CHOICES)
+    # Fetch recent update logs (top 5) for dashboard
+    import sharp_mfp_export
+    logs = []
+    try:
+        conn = sharp_mfp_export.get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM update_logs ORDER BY id DESC LIMIT 5")
+            logs = cursor.fetchall()
+        conn.close()
+    except Exception:
+        pass # Fail gracefully if DB not ready
+        
+    return render_template("index.html", printer_choices=PRINTER_CHOICES, logs=logs)
 
 
 @app.route("/counts")
@@ -982,6 +1044,7 @@ def leaders():
         errors=context["errors"],
         aggregated=context["aggregated"],
         query_string=query_string,
+        pagination=context.get("pagination"),
     )
 
 
@@ -1076,6 +1139,8 @@ def export_leaders():
     context = _prepare_leaders_context(query)
     wb = _build_leaders_workbook(context["results"], context["aggregated"])
     return _workbook_response(wb, "leaders_export.xlsx")
+
+
 
 
 if __name__ == "__main__":

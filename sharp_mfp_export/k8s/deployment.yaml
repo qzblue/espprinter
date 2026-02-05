@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sharp-printer-webapp
+  labels:
+    app: sharp-printer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sharp-printer
+  template:
+    metadata:
+      labels:
+        app: sharp-printer
+    spec:
+      containers:
+      - name: webapp
+        image: sharp-printer-webapp:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5000
+        env:
+        - name: DB_HOST
+          value: "10.32.65.22"
+        # Secrets should ideally use Secret resource
+        - name: DB_PASS
+          value: "HDtAHFahLsdkNazm"
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sharp-printer-service
+spec:
+  selector:
+    app: sharp-printer
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 5000
+  type: LoadBalancer

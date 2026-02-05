@@ -1,0 +1,24 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: sharp-printer-update
+spec:
+  # Daily at 18:00 (UTC+8 need check timezone, assuming K8s is UTC, 18:00 HK is 10:00 UTC)
+  # But if node is local time, or setting timezone...
+  # Usually K8s CronJob is UTC. 18:00 HKT = 10:00 UTC.
+  schedule: "0 10 * * *" 
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: updater
+            image: sharp-printer-webapp:latest
+            imagePullPolicy: IfNotPresent
+            command: ["python", "sharp_mfp_export.py", "download", "--source", "auto"]
+            env:
+            - name: DB_HOST
+              value: "10.32.65.22"
+            - name: DB_PASS
+              value: "HDtAHFahLsdkNazm"
+          restartPolicy: OnFailure

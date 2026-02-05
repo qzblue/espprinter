@@ -1,0 +1,39 @@
+Traceback (most recent call last):
+  File "<string>", line 4, in <module>
+    res = client.get('/export/stats?view_mode=single_printer&printer=all&user=zzy0721&time_mode=all&export_scope=all');
+  File "C:\Users\ZZY0721\AppData\Local\Programs\Python\Python313\Lib\site-packages\werkzeug\test.py", line 1162, in get
+    return self.open(*args, **kw)
+           ~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\ZZY0721\AppData\Local\Programs\Python\Python313\Lib\site-packages\flask\testing.py", line 235, in open
+    response = super().open(
+        request,
+        buffered=buffered,
+        follow_redirects=follow_redirects,
+    )
+  File "C:\Users\ZZY0721\AppData\Local\Programs\Python\Python313\Lib\site-packages\werkzeug\test.py", line 1116, in open
+    response_parts = self.run_wsgi_app(request.environ, buffered=buffered)
+  File "C:\Users\ZZY0721\AppData\Local\Programs\Python\Python313\Lib\site-packages\werkzeug\test.py", line 988, in run_wsgi_app
+    rv = run_wsgi_app(self.application, environ, buffered=buffered)
+  File "C:\Users\ZZY0721\AppData\Local\Programs\Python\Python313\Lib\site-packages\werkzeug\test.py", line 1264, in run_wsgi_app
+    app_rv = app(environ, start_response)
+  File "C:\Users\ZZY0721\AppData\Local\Programs\Python\Python313\Lib\site-packages\flask\app.py", line 1536, in __call__
+    return self.wsgi_app(environ, start_response)
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ZZY0721\AppData\Local\Programs\Python\Python313\Lib\site-packages\flask\app.py", line 1514, in wsgi_app
+    response = self.handle_exception(e)
+  File "C:\Users\ZZY0721\AppData\Local\Programs\Python\Python313\Lib\site-packages\flask\app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+  File "C:\Users\ZZY0721\AppData\Local\Programs\Python\Python313\Lib\site-packages\flask\app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+  File "C:\Users\ZZY0721\AppData\Local\Programs\Python\Python313\Lib\site-packages\flask\app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "C:\Users\ZZY0721\AppData\Local\Programs\Python\Python313\Lib\site-packages\flask\app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "C:\Users\ZZY0721\OneDrive - ESCOLA SAO PAULO\桌面\工作资料\coding\espprinter\sharp_mfp_export\webapp.py", line 998, in export_stats
+    context = _prepare_counts_context(clean_query, export_mode=True)
+  File "C:\Users\ZZY0721\OneDrive - ESCOLA SAO PAULO\桌面\工作资料\coding\espprinter\sharp_mfp_export\webapp.py", line 509, in _prepare_counts_context
+    limit = _to_int(query["limit"], 0) # Limit per user display is legacy, we rely on pagination now.
+                    ~~~~~^^^^^^^^^
+KeyError: 'limit'
+Sending request...
