@@ -614,6 +614,43 @@ TIMEOUT = 30
 RETRY = 2
 SLEEP_BETWEEN_PRINTERS = 0.5
 CSV_ENCODING = "big5"
+
+
+def warmup_webapp() -> None:
+    """Check environment for URLs to warm up (e.g. after auto-update)."""
+    # Environment variable format:
+    # WARMUP_URLS="http://webapp:5000/counts,http://webapp:5000/jobs"
+    # Or base URL: WEBAPP_URL="http://webapp:5000" (will append /counts, /jobs, /leaders)
+    
+    urls = []
+    
+    # Method 1: Explicit full URLs
+    raw_urls = os.getenv("WARMUP_URLS")
+    if raw_urls:
+        urls.extend([u.strip() for u in raw_urls.split(",") if u.strip()])
+        
+    # Method 2: Base URL (more convenient for K8s/Docker)
+    base_url = os.getenv("WEBAPP_URL")
+    if base_url:
+        base_url = base_url.rstrip("/")
+        urls.append(f"{base_url}/counts")
+        urls.append(f"{base_url}/jobs")
+        urls.append(f"{base_url}/leaders")
+        
+    if not urls:
+        return
+
+    print(f"Triggering cache warmup for {len(urls)} endpoints...")
+    timeout = 10 # short timeout for warmup
+    for url in urls:
+        try:
+            print(f"  Pinging {url} ... ", end="", flush=True)
+            requests.get(url, timeout=timeout)
+            print("OK")
+        except Exception as e:
+            print(f"FAIL: {e}")
+
+
 CSV_ERRORS = "replace"
 # =====================================
 
@@ -978,6 +1015,16 @@ def run_download_process(printers: Optional[List[str]] = None):
     else:
         log_update(True, "手動更新成功")
         yield "LOG: 更新記錄已寫入資料庫"
+        
+        # Trigger external warmup if configured (for K8s CronJob)
+        # We assume run_download_process is a generator, so we just perform the action
+        # wrapping it in a trivial yield or just run it (it prints to stdout usually)
+        # But wait, we are inside a generator. Printing goes to stdout? 
+        # Yes. If called by CLI, it prints. If called by Web, it might be lost or captured?
+        # Webapp consumes generator. If we print, it goes to server console.
+        # Ideally we should yield a log message about it.
+        warmup_webapp()
+        yield "LOG: 執行緩存預熱 (若有配置)"
 
 
 def download_exports(printers: Optional[List[str]] = None) -> None:

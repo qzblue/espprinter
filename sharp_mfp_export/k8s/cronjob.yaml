@@ -21,4 +21,6 @@ spec:
               value: "10.32.65.22"
             - name: DB_PASS
               value: "HDtAHFahLsdkNazm"
+            - name: WEBAPP_URL
+              value: "http://espprinter-service:5000" # Update with actual Service DNS
           restartPolicy: OnFailure

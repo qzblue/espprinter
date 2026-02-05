@@ -12,6 +12,8 @@ def check_update_logs():
         for r in rows:
             print(f"[{r['start_time']}] Source: {r['trigger_source']}, Status: {r['status']}")
             print(f"  Message: {r['message']}")
+            if r['status'] == 'failed':
+                 print(f"FAIL: {r.get('message', '')}")
     conn.close()
 
 def debug_154_download():
