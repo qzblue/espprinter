@@ -16,6 +16,12 @@ try:
     LDAP_AVAILABLE = True
 except ImportError:
     LDAP_AVAILABLE = False
+    # Define dummy placeholders for type hints if library is missing
+    Server = object
+    Connection = object
+    ALL = None
+    SUBTREE = None
+    LDAPException = Exception
 
 # Configure logging
 logger = logging.getLogger(__name__)
