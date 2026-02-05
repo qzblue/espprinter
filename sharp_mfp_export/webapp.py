@@ -1000,8 +1000,8 @@ def index():
         conn = sharp_mfp_export.get_db_connection()
         with conn.cursor() as cursor:
             # Get total count
-            cursor.execute("SELECT COUNT(*) FROM update_logs")
-            total_logs = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) as c FROM update_logs")
+            total_logs = cursor.fetchone()['c']
             
             # Calculate offset
             total_pages = math.ceil(total_logs / per_page)
