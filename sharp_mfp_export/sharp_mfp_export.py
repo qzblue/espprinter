@@ -80,12 +80,29 @@ def init_db():
                 bw_pages INT DEFAULT 0,
                 color_pages INT DEFAULT 0,
                 total_pages INT DEFAULT 0,
+                file_name VARCHAR(255),
+                scan_type VARCHAR(100),
+                destination VARCHAR(255),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE KEY unique_job (printer_addr, job_id, start_time) 
             );
             """
             cursor.execute(sql)
 
+            # Attempt to add new columns if they don't exist (Migration)
+            alter_sqls = [
+                "ALTER TABLE job_logs ADD COLUMN IF NOT EXISTS file_name VARCHAR(255)",
+                "ALTER TABLE job_logs ADD COLUMN IF NOT EXISTS scan_type VARCHAR(100)",
+                "ALTER TABLE job_logs ADD COLUMN IF NOT EXISTS destination VARCHAR(255)"
+            ]
+            for asql in alter_sqls:
+                try:
+                    cursor.execute(asql)
+                except Exception:
+                    # Ignore if column exists or not supported (IF NOT EXISTS is MariaDB/MySQL 5.7+)
+                    # Use standard try-except for robust migration
+                    pass
+            
             # User Count Table
             sql_uc = """
             CREATE TABLE IF NOT EXISTS user_counts (
@@ -117,11 +134,19 @@ def sync_csv_to_db(path: Path, printer_addr: str) -> int:
     try:
         with conn.cursor() as cursor:
             sql = """
-            INSERT IGNORE INTO job_logs (
+            INSERT INTO job_logs (
                 printer_addr, job_id, account_job_id, mode, 
                 user_name, login_name, computer_name, 
-                start_time, end_time, bw_pages, color_pages, total_pages
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                start_time, end_time, bw_pages, color_pages, total_pages,
+                file_name, scan_type, destination
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                file_name = VALUES(file_name),
+                scan_type = VALUES(scan_type),
+                destination = VALUES(destination),
+                bw_pages = VALUES(bw_pages),
+                color_pages = VALUES(color_pages),
+                total_pages = VALUES(total_pages)
             """
             
             # Prepare batch
@@ -142,7 +167,10 @@ def sync_csv_to_db(path: Path, printer_addr: str) -> int:
                     e.get("end"),
                     e.get("bw", 0),
                     e.get("color", 0),
-                    e.get("pages", 0)
+                    e.get("pages", 0),
+                    e.get("file_name"),
+                    e.get("scan_type"),
+                    e.get("destination")
                 ))
             
             if values:
@@ -471,7 +499,10 @@ def _convert_db_rows_to_api(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "user_key": normalize_name(user_name, "未知").lower(),
             "login_display": normalize_name(login_name, "N/A"),
             "login_key": normalize_name(login_name, "N/A").lower(),
-            "printer": r['printer_addr']
+            "printer": r['printer_addr'],
+            "file_name": r.get('file_name'),
+            "scan_type": r.get('scan_type'),
+            "destination": r.get('destination')
         })
     return results
 
@@ -1121,6 +1152,9 @@ def _joblog_entries_from_csv_raw(path: Path) -> List[Dict[str, Any]]:
             "end": parse_time_value(row.get("完成日期") or row.get("Completion Date")),
             "bw": safe_int(row.get("黑白總張數")),
             "color": safe_int(row.get("全彩總張數")),
+            "file_name": row.get("檔案名稱"),
+            "scan_type": row.get("傳送類型"),
+            "destination": row.get("直接位址"),
         }
         entry["pages"] = entry["bw"] + entry["color"]
         entry["user_display"] = user_display
@@ -1345,8 +1379,8 @@ def print_aggregated_summary(summary: Dict[str, Any], limit: int) -> None:
 
 
 USAGE_CATEGORY_CONFIG = {
-    "print_bw": {"label": "印表機:黑白", "mode": "print", "color": "bw"},
-    "print_color": {"label": "印表機:全彩", "mode": "print", "color": "color"},
+    "printer_bw": {"label": "列印:黑白", "color": "bw", "mode": "print"},
+    "printer_color": {"label": "列印:全彩", "color": "color", "mode": "print"},
     "copy_bw": {"label": "影印:黑白", "mode": "copy", "color": "bw"},
     "copy_color": {"label": "影印:全彩", "mode": "copy", "color": "color"},
 }

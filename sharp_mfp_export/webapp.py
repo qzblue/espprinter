@@ -142,7 +142,16 @@ def update_data():
 
             process.wait()
             if process.returncode == 0:
-                yield 'data: {"status": "done", "message": "更新完成！"}\n\n'
+                yield 'data: {"status": "log", "message": "正在預熱緩存..."}\n\n'
+                try:
+                    # Warm up cache for main endpoints
+                    with app.test_client() as client:
+                        client.get("/counts")
+                        client.get("/jobs")
+                        client.get("/leaders")
+                    yield 'data: {"status": "done", "message": "更新完成！"}\n\n'
+                except Exception as w_err:
+                    yield f'data: {{"status": "error", "message": "緩存預熱失敗: {str(w_err)}"}}\n\n'
             else:
                 yield 'data: {"status": "error", "message": "更新過程中發生錯誤"}\n\n'
         

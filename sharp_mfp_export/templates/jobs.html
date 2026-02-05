@@ -17,7 +17,7 @@
     </label>
     <label>
       <span>用戶 / 登入名稱</span>
-      <input type="text" name="user" value="{{ query.user }}" placeholder="例如 psi" />
+      <input type="text" name="user" value="{{ query.user }}" placeholder="例如zzy或朱振宇" />
     </label>
     <label>
       <span>工作模式</span>
@@ -94,8 +94,7 @@
 {% if results %}
 {% for block in results %}
 <section class="card">
-  <h2>{{ block.name }} {% if block.login and block.login != block.name %}<span class="tag">{{ block.login }}</span>{%
-    endif %}</h2>
+  <h2>{{ block.login | user_display_name }}</h2>
   <p>共 {{ block.totals.jobs }} 筆，{{ block.totals.pages }} 張 (黑白 {{ block.totals.bw }} / 彩色 {{ block.totals.color }})。
   </p>
   {% if block.printer_totals %}
@@ -122,6 +121,16 @@
         <td>
           <strong>{{ item.start }}</strong><br />
           {{ item.mode }}
+          {% if '列印' in item.mode and item.file_name %}
+          <br><span
+            style="color: #4b5563; font-size: 0.85em; display: inline-block; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+            title="{{ item.file_name }}"><i class="far fa-file-alt"></i> {{ item.file_name }}</span>
+          {% elif '掃描' in item.mode %}
+          {% if item.scan_type %}<br><span style="color: #4b5563; font-size: 0.85em"><i class="fas fa-cog"></i> {{
+            item.scan_type }}</span>{% endif %}
+          {% if item.destination %}<br><span style="color: #4b5563; font-size: 0.85em"><i
+              class="fas fa-share-square"></i> {{ item.destination }}</span>{% endif %}
+          {% endif %}
         </td>
         <td>{{ item.computer }}</td>
         <td>{{ item.pages }}<br /><small>黑白 {{ item.bw }} / 彩色 {{ item.color }}</small></td>
