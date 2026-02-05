@@ -5,7 +5,8 @@ WORKDIR /app
 # Install dependencies
 COPY requirements.txt .
 # If requirements.txt doesn't exist, we install manually (fallback)
-RUN pip install --no-cache-dir flask waitress pymysql requests openpyxl flask-caching
+# If requirements.txt doesn't exist, we install manually (fallback)
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy app code
 COPY . .
