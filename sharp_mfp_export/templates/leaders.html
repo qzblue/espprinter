@@ -70,6 +70,10 @@
       <a class="btn" href="{{ url_for('export_leaders') }}{% if query_string %}?{{ query_string }}{% endif %}">導出
         Excel</a>
     </div>
+
+    <div style="grid-column: 1 / -1; margin-top: 1rem; color: #dc2626; font-weight: bold; text-align: center;">
+      <i class="fas fa-exclamation-circle"></i> 注意：請務必點擊「套用篩選」按鈕以獲取正確數據！
+    </div>
   </form>
 </section>
 
@@ -101,7 +105,7 @@
       {% for item in block.top_users %}
       <tr>
         <td>
-          {{ item.user }}
+          {{ item.user | user_display_name }}
           {% if item.login and item.login != item.user %}
           <div style="font-size: 0.85rem; color: #6b7280">{{ item.login }}</div>
           {% endif %}
@@ -133,7 +137,7 @@
       {% for item in aggregated.users %}
       <tr>
         <td>
-          {{ item.user }}
+          {{ item.user | user_display_name }}
           {% if item.login and item.login != item.user %}
           <div style="font-size: 0.85rem; color: #6b7280">{{ item.login }}</div>
           {% endif %}

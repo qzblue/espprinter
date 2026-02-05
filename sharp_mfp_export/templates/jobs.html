@@ -76,6 +76,10 @@
       <button type="submit">套用篩選</button>
       <a class="btn" href="{{ url_for('export_jobs') }}{% if query_string %}?{{ query_string }}{% endif %}">導出 Excel</a>
     </div>
+
+    <div style="grid-column: 1 / -1; margin-top: 1rem; color: #dc2626; font-weight: bold; text-align: center;">
+      <i class="fas fa-exclamation-circle"></i> 注意：請務必點擊「套用篩選」按鈕以獲取正確數據！
+    </div>
   </form>
 </section>
 
@@ -114,7 +118,7 @@
     <tbody>
       {% for item in block.entries %}
       <tr>
-        <td>{{ item.printer }}</td>
+        <td>{{ item.printer | printer_label }}</td>
         <td>
           <strong>{{ item.start }}</strong><br />
           {{ item.mode }}

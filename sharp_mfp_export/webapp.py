@@ -34,12 +34,26 @@ from sharp_mfp_export import (
     normalize_name,
 )
 
+import ldap_service
+
 app = Flask(__name__)
 
 # Configure caching with simple in-memory cache
 app.config['CACHE_TYPE'] = 'SimpleCache'
 app.config['CACHE_DEFAULT_TIMEOUT'] = 300  # 5 minutes
 cache = Cache(app)
+
+# Register custom Jinja2 filter for printer label conversion
+@app.template_filter('printer_label')
+def printer_label_filter(url: str) -> str:
+    """Convert printer URL to friendly label for use in templates"""
+    return _printer_label(url)
+
+# Register custom Jinja2 filter for user display name from LDAP
+@app.template_filter('user_display_name')
+def user_display_name_filter(username: str, show_username: bool = True) -> str:
+    """Convert username to display name from Active Directory"""
+    return ldap_service.format_user_display(username, show_username)
 
 
 try:
@@ -91,9 +105,16 @@ download_lock = Lock()
 @app.route("/update_data")
 def update_data():
     def generate():
+        token = request.args.get("token", "")
+        expected_token = "2851@9364"
+
+        if token != expected_token:
+            yield 'data: {"status": "error", "message": "密碼錯誤，您沒有權限執行更新。"}\n\n'
+            return
+
         # Try to acquire lock
         if not download_lock.acquire(blocking=False):
-            yield "data: {\"status\": \"error\", \"message\": \"已有更新正在進行中，請稍後再試。\"}\n\n"
+            yield 'data: {"status": "error", "message": "已有更新正在進行中，請稍後再試。"}\n\n'
             return
 
         try:
@@ -107,7 +128,7 @@ def update_data():
                 errors="replace"
             )
             
-            yield "data: {\"status\": \"start\", \"message\": \"開始更新程序...\"}\n\n"
+            yield 'data: {"status": "start", "message": "開始更新程序..."}\n\n'
 
             if process.stdout:
                 for line in process.stdout:
@@ -115,18 +136,18 @@ def update_data():
                     if not line:
                         continue
                     if line.startswith("== http"):
-                        yield f"data: {{\"status\": \"progress\", \"message\": \"正在處理: {line[3:]}\"}}\n\n"
+                        yield f'data: {{"status": "progress", "message": "正在處理: {line[3:]}"}}\n\n'
                     else:
-                        yield f"data: {{\"status\": \"log\", \"message\": \"{line}\"}}\n\n"
+                        yield f'data: {{"status": "log", "message": "{line}"}}\n\n'
 
             process.wait()
             if process.returncode == 0:
-                yield "data: {\"status\": \"done\", \"message\": \"更新完成！\"}\n\n"
+                yield 'data: {"status": "done", "message": "更新完成！"}\n\n'
             else:
-                yield "data: {\"status\": \"error\", \"message\": \"更新過程中發生錯誤\"}\n\n"
+                yield 'data: {"status": "error", "message": "更新過程中發生錯誤"}\n\n'
         
         except Exception as e:
-            yield f"data: {{\"status\": \"error\", \"message\": \"系統錯誤: {str(e)}\"}}\n\n"
+            yield f'data: {{"status": "error", "message": "系統錯誤: {str(e)}"}}\n\n'
         
         finally:
             download_lock.release()
@@ -233,7 +254,13 @@ def _format_usage_entries(
         if total == 0 and not show_zero:
             continue
         category_map = {item["key"]: item["pages"] for item in cat_values}
-        ordered.append({"name": record["name"], "total": total, "categories": cat_values, "category_map": category_map})
+        ordered.append({
+            "name": record["name"],
+            "username": record.get("username", ""),  # Pass username through
+            "total": total,
+            "categories": cat_values,
+            "category_map": category_map
+        })
 
     ordered.sort(key=lambda item: item["total"], reverse=True)
     if limit > 0:
@@ -463,6 +490,8 @@ def _build_counts_query() -> Dict[str, Any]:
         "categories": request.args.getlist("category"),
         "limit": request.args.get("limit", "0"),
         "show_zero": request.args.get("show_zero") == "on",
+        "view_mode": request.args.get("view_mode", "single_printer"),  # single_printer, all_printers, aggregated
+        "export_scope": request.args.get("export_scope", "filtered"),  # filtered, all
     }
 
 
@@ -481,11 +510,11 @@ def _prepare_counts_context(query: Dict[str, Any], export_mode: bool = False) ->
             page = 1
 
         try:
-            per_page = int(request.args.get("per_page", 10))
-            if per_page not in [2, 5, 10, 20, 50, 100]:
-                per_page = 10
+            per_page = int(request.args.get("per_page", 30))  # Changed default to 30
+            if per_page not in [10, 20, 30, 50, 100]:  # Updated valid options
+                per_page = 30
         except ValueError:
-            per_page = 10
+            per_page = 30
     
     # Update query dict so template receives the effective value (and dropdown selects correctly)
     query["per_page"] = str(per_page)
@@ -504,6 +533,7 @@ def _prepare_counts_context(query: Dict[str, Any], export_mode: bool = False) ->
     # I should map the old 'limit' form field to 'per_page' or just use 'per_page'.
     # I will rely on 'per_page' and ignore 'limit' for determining valid users.
 
+
     errors: List[str] = []
     start_dt, end_dt = _resolve_time_range_from_query(
         query["time_mode"], query["month"], query["week"], query["start"], query["end"], errors
@@ -512,52 +542,68 @@ def _prepare_counts_context(query: Dict[str, Any], export_mode: bool = False) ->
     user_kw = query["user"] or None
     requested_categories = query["categories"] or DEFAULT_USAGE_CATEGORIES
     categories = [key for key in requested_categories if key in USAGE_CATEGORY_CONFIG] or DEFAULT_USAGE_CATEGORIES
+    view_mode = query.get("view_mode", "single_printer")
     
-    # 1. Fetch paginated users (Global Aggregation) for the Summary View and Pagination Control
-    # Use "all" or specific printer logic for the global view.
-    # Note: If printer_pick is "all", this is truly global.
-    global_users, global_total = fetch_aggregated_users_paginated(
-        page, per_page, 
-        printer_addr=printer_pick,
-        user_kw=user_kw,
-        mode_kw=None,
-        computer_kw=None,
-        start_dt=start_dt,
-        end_dt=end_dt
-    )
-
-    # Global/Aggregated Report
-    aggregated = None
-    if global_users:
-        global_detailed = fetch_job_logs_by_users(
-            global_users,
-            printer_addr=printer_pick,
-            mode_kw=None,
-            computer_kw=None,
-            start_dt=start_dt,
-            end_dt=end_dt
-        )
-        agg_stats = aggregate_usage_by_categories(global_detailed, categories, user_kw)
-        aggregated_entries = _format_usage_entries(agg_stats, categories, 0, False)
-        aggregated = {"entries": aggregated_entries} if aggregated_entries else None
-
-    # 2. Fetch Report Per Printer
-    # We must paginate EACH printer independently so that "Page 1" shows the top users for THAT printer.
     category_columns = [
         {"key": key, "label": USAGE_CATEGORY_CONFIG[key]["label"]}
         for key in categories
     ]
     
     results = []
-    printers = _selected_printers(printer_pick)
+    aggregated = None
+    total_users = 0
     
-    for printer in printers:
-        label = _printer_label(printer)
+    # View Mode Logic
+    if view_mode == "single_printer":
+        # Single Printer View: Show only one printer's data
+        # If printer_pick is "all", default to first printer
+        if printer_pick == "all" and PRINTERS:
+            printer_pick = PRINTERS[0]
         
-        # Paginated users for THIS printer
-        p_users, p_total = fetch_aggregated_users_paginated(
-            page, per_page, 
-            printer_addr=printer, # Specific printer
+        if printer_pick != "all":
+            # Fetch paginated users for selected printer
+            p_users, total_users = fetch_aggregated_users_paginated(
+                page, per_page,
+                printer_addr=printer_pick,
+                user_kw=user_kw,
+                mode_kw=None,
+                computer_kw=None,
+                start_dt=start_dt,
+                end_dt=end_dt
+            )
+            
+            if p_users:
+                p_detailed = fetch_job_logs_by_users(
+                    p_users,
+                    printer_addr=printer_pick,
+                    mode_kw=None,
+                    computer_kw=None,
+                    start_dt=start_dt,
+                    end_dt=end_dt
+                )
+                stats = aggregate_usage_by_categories(p_detailed, categories, None)
+                formatted_entries = _format_usage_entries(stats, categories, 0, False)
+                
+                results.append({
+                    "printer": printer_pick,
+                    "label": _printer_label(printer_pick),
+                    "file_name": "DB_Query",
+                    "entries": formatted_entries,
+                })
+            else:
+                results.append({
+                    "printer": printer_pick,
+                    "label": _printer_label(printer_pick),
+                    "file_name": "DB_Query",
+                    "entries": [],
+                })
+    
+    elif view_mode == "all_printers":
+        # All Printers View: Unified table with printer column
+        # Fetch paginated users across ALL printers
+        all_users, total_users = fetch_aggregated_users_paginated(
+            page, per_page,
+            printer_addr="all",  # All printers
             user_kw=user_kw,
             mode_kw=None,
             computer_kw=None,
@@ -565,53 +611,93 @@ def _prepare_counts_context(query: Dict[str, Any], export_mode: bool = False) ->
             end_dt=end_dt
         )
         
-        if not p_users:
-             # Just show empty or "No data"
-             results.append({
-                "printer": printer,
-                "label": label,
-                "file_name": "DB_Query",
-                "entries": [],
-             })
-             continue
-
-        # Valid users found, fetch their logs
-        p_detailed = fetch_job_logs_by_users(
-            p_users,
-            printer_addr=printer,
+        if all_users:
+            # Fetch detailed logs for these users across all printers
+            all_detailed = fetch_job_logs_by_users(
+                all_users,
+                printer_addr="all",
+                mode_kw=None,
+                computer_kw=None,
+                start_dt=start_dt,
+                end_dt=end_dt
+            )
+            
+            # Group logs by printer first, then aggregate per printer
+            from collections import defaultdict
+            printer_logs = defaultdict(list)
+            for log in all_detailed:
+                printer = log.get("printer", "")  # Changed from printer_addr to printer
+                printer_logs[printer].append(log)
+            
+            # Aggregate each printer's data and combine with printer info
+            unified_entries = []
+            for printer, logs in printer_logs.items():
+                # Use existing aggregation function for consistency
+                stats = aggregate_usage_by_categories(logs, categories, None)
+                
+                # stats is a dict: {user_key: {"name": ..., "totals": {...}, "total": ...}}
+                for user_key, user_data in stats.items():
+                    category_map = {}
+                    for cat in categories:
+                        # user_data["totals"] contains the category counts
+                        category_map[cat] = user_data["totals"].get(cat, 0)
+                    
+                    unified_entries.append({
+                        "name": user_data["name"],
+                        "username": user_data.get("username", ""),  # Add username
+                        "login": "",  # Not available in aggregated stats
+                        "category_map": category_map,
+                        "total": user_data["total"],
+                        "printer": printer
+                    })
+            
+            # Sort by total pages desc
+            unified_entries.sort(key=lambda x: x["total"], reverse=True)
+            
+            # Store in results (single "block" for all printers)
+            results = unified_entries
+    
+    elif view_mode == "aggregated":
+        # Aggregated View: Cross-printer user totals
+        agg_users, total_users = fetch_aggregated_users_paginated(
+            page, per_page,
+            printer_addr="all",
+            user_kw=user_kw,
             mode_kw=None,
             computer_kw=None,
             start_dt=start_dt,
             end_dt=end_dt
         )
         
-        stats = aggregate_usage_by_categories(p_detailed, categories, user_kw)
-        formatted_entries = _format_usage_entries(stats, categories, 0, False)
-        
-        results.append({
-            "printer": printer,
-            "label": label,
-            "file_name": "DB_Query",
-            "entries": formatted_entries,
-        })
-        
-    # Calculate total pages based on Global Total (Aggregation)
-    # This ensures consistency for the bottom pagination control.
-    # While individual printers might have fewer pages, the "Summary" usually covers the max.
+        if agg_users:
+            agg_detailed = fetch_job_logs_by_users(
+                agg_users,
+                printer_addr="all",
+                mode_kw=None,
+                computer_kw=None,
+                start_dt=start_dt,
+                end_dt=end_dt
+            )
+            agg_stats = aggregate_usage_by_categories(agg_detailed, categories, None)
+            aggregated_entries = _format_usage_entries(agg_stats, categories, 0, False)
+            aggregated = {"entries": aggregated_entries} if aggregated_entries else None
+    
+    # Calculate total pages
     import math
-    total_pages_count = math.ceil(global_total / per_page) if per_page > 0 else 0
+    total_pages_count = math.ceil(total_users / per_page) if per_page > 0 else 0
 
     return {
         "results": results,
         "errors": errors,
         "category_columns": category_columns,
-        "reports": [], # unused
+        "reports": [],  # unused
         "aggregated": aggregated,
         "categories": categories,
+        "view_mode": view_mode,
         "pagination": {
             "page": page,
             "per_page": per_page,
-            "total_users": global_total,
+            "total_users": total_users,
             "total_pages": total_pages_count,
             "has_prev": page > 1,
             "has_next": page < total_pages_count,
@@ -732,11 +818,13 @@ def _build_counts_workbook(results: List[Dict[str, Any]], categories: List[str])
         ws = wb.active if first_sheet else wb.create_sheet(title)
         ws.title = title
         first_sheet = False
-        headers = ["用戶"] + [USAGE_CATEGORY_CONFIG[key]["label"] for key in categories] + ["總張數"]
+        headers = ["用戶", "帳號"] + [USAGE_CATEGORY_CONFIG[key]["label"] for key in categories] + ["總張數"]
         ws.append(headers)
         for item in block.get("entries", []):
             category_map = item.get("category_map", {})
-            row = [item["name"]]
+            username = item.get("username", "")
+            display_name = ldap_service.get_user_display_name(username) if username else item["name"]
+            row = [display_name, username]
             for key in categories:
                 row.append(category_map.get(key, 0))
             row.append(item["total"])
@@ -748,20 +836,51 @@ def _build_counts_workbook(results: List[Dict[str, Any]], categories: List[str])
 
 
 
+
+
 def _build_combined_counts_workbook(entries: List[Dict[str, Any]], categories: List[str]) -> Workbook:
     wb = Workbook()
     ws = wb.active
     ws.title = "跨機器彙總"
-    headers = ["用戶"] + [USAGE_CATEGORY_CONFIG[key]["label"] for key in categories] + ["總張數"]
+    headers = ["用戶", "帳號"] + [USAGE_CATEGORY_CONFIG[key]["label"] for key in categories] + ["總張數"]
     ws.append(headers)
     for item in entries:
         category_map = item.get("category_map", {})
-        row = [item.get("name", "未知")]
+        row = [item.get("name", "未知"), item.get("username", "")]
         for key in categories:
             row.append(category_map.get(key, 0))
         row.append(item.get("total", 0))
         ws.append(row)
     return wb
+
+
+def _build_all_printers_workbook(entries: List[Dict[str, Any]], categories: List[str]) -> Workbook:
+    """
+    Build workbook for 'all_printers' view mode.
+    Creates a single sheet with unified table including printer column.
+    """
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "所有列印機統計"
+    
+    # Headers: User, Username, Categories..., Total, Printer
+    headers = ["用戶", "帳號"] + [USAGE_CATEGORY_CONFIG[key]["label"] for key in categories] + ["總張數", "列印機"]
+    ws.append(headers)
+    
+    # Add data rows
+    for item in entries:
+        category_map = item.get("category_map", {})
+        username = item.get("username", "")
+        display_name = ldap_service.get_user_display_name(username) if username else item.get("name", "未知")
+        row = [display_name, username]
+        for key in categories:
+            row.append(category_map.get(key, 0))
+        row.append(item.get("total", 0))
+        row.append(_printer_label(item.get("printer", "")))
+        ws.append(row)
+    
+    return wb
+
 
 
 def _build_leaders_workbook(results: List[Dict[str, Any]], aggregated: Optional[Dict[str, Any]]) -> Workbook:
@@ -867,24 +986,77 @@ def export_jobs():
 
 @app.route("/export/stats")
 def export_stats():
+    """
+    Unified export route that handles all three view modes and export scopes.
+    - view_mode: single_printer, all_printers, aggregated
+    - export_scope: filtered (current page/filter), all (all matching data)
+    """
     query = _build_counts_query()
-    # query["limit"] = "0" # No longer needed
-    context = _prepare_counts_context(query, export_mode=True)
+    view_mode = query.get("view_mode", "single_printer")
+    export_scope = query.get("export_scope", "filtered")
+    categories = query.get("categories", [])
+    
+    # Prepare context based on export scope
+    if export_scope == "all":
+        # Export ALL data: create clean query without any filters
+        clean_query = {
+            "view_mode": view_mode,
+            "categories": categories,
+            "printer": "all",  # All printers
+            "user": "",  # No user filter
+            "time_mode": "all",  # All time
+            "month": "",
+            "week": "",
+            "start": "",  # Changed from None to empty string
+            "end": "",    # Changed from None to empty string
+            "page": 1,
+            "per_page": 0,  # No pagination
+            "limit": "0",   # Missing key caused 500
+            "export_scope": "all"
+        }
+        context = _prepare_counts_context(clean_query, export_mode=True)
+    else:
+        # Export filtered data: use current filters + current page
+        context = _prepare_counts_context(query, export_mode=False)
+    
     categories = context["categories"]
-    wb = _build_counts_workbook(context["results"], categories)
-    return _workbook_response(wb, "stats_export.xlsx")
+    
+    # Build workbook based on view mode
+    if view_mode == "single_printer":
+        # Single printer: export per-printer workbook
+        wb = _build_counts_workbook(context["results"], categories)
+        filename = "stats_single_printer.xlsx"
+    
+    elif view_mode == "all_printers":
+        # All printers: export unified table with printer column
+        # Need to create a new workbook builder for this format
+        wb = _build_all_printers_workbook(context["results"], categories)
+        filename = "stats_all_printers.xlsx"
+    
+    elif view_mode == "aggregated":
+        # Aggregated: export cross-printer summary
+        aggregated = context.get("aggregated") or {"entries": []}
+        entries = aggregated.get("entries", [])
+        wb = _build_combined_counts_workbook(entries, categories)
+        filename = "stats_aggregated.xlsx"
+    
+    else:
+        # Fallback to single printer mode
+        wb = _build_counts_workbook(context["results"], categories)
+        filename = "stats_export.xlsx"
+    
+    return _workbook_response(wb, filename)
 
 
+# Keep legacy route for backward compatibility (redirects to new unified route)
 @app.route("/export/stats_combined")
 def export_stats_combined():
-    query = _build_counts_query()
-    # query["limit"] = "0"
-    context = _prepare_counts_context(query, export_mode=True)
-    categories = context["categories"]
-    aggregated = context.get("aggregated") or {"entries": []}
-    entries = aggregated.get("entries", [])
-    wb = _build_combined_counts_workbook(entries, categories)
-    return _workbook_response(wb, "stats_combined.xlsx")
+    """Legacy route: redirects to unified export with aggregated view mode"""
+    from flask import redirect, url_for
+    # Preserve query parameters and add view_mode=aggregated
+    args = request.args.to_dict(flat=False)
+    args['view_mode'] = ['aggregated']
+    return redirect(url_for('export_stats', **{k: v[0] if len(v) == 1 else v for k, v in args.items()}))
 
 
 @app.route("/export/leaders")

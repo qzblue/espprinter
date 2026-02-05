@@ -127,6 +127,12 @@
     const logOutput = document.getElementById('log-output');
     const closeBtn = document.getElementById('close-modal-btn');
 
+    const password = prompt("請輸入更新密碼：", "");
+    if (password === null) {
+      // User cancelled
+      return;
+    }
+
     // Reset state
     modal.style.display = 'flex';
     progressBar.style.width = '0%';
@@ -136,10 +142,10 @@
 
     // Simulation config
     let progress = 0;
-    const targetDuration = 600 * 1000; // 10 minutes (600 seconds)
+    const targetDuration = 300 * 1000; // 5 minutes (300 seconds)
     const intervalTime = 500; // Update every 500ms
     const steps = targetDuration / intervalTime;
-    const increment = 98 / steps; // Aim for 98% in 600s
+    const increment = 98 / steps; // Aim for 98% in 300s
 
     const timer = setInterval(() => {
       if (progress < 98) {
@@ -156,7 +162,7 @@
       return "數據更新中，確定要離開嗎？";
     };
 
-    const es = new EventSource('/update_data');
+    const es = new EventSource('/update_data?token=' + encodeURIComponent(password));
 
     es.onmessage = function (event) {
       const data = JSON.parse(event.data);
@@ -191,7 +197,7 @@
         progressBar.style.backgroundColor = '#059669';
         statusText.innerText = data.message;
         closeBtn.style.display = 'inline-block';
-        alert(data.message);
+        // Alert removed as requested
 
       } else if (data.status === 'error') {
         clearInterval(timer);

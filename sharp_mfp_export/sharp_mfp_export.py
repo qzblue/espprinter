@@ -313,9 +313,23 @@ def _build_job_logs_where_clause(
         params.append(printer_addr)
     
     if user_kw:
-        sql += " AND (user_name LIKE %s OR login_name LIKE %s)"
-        kw = f"%{user_kw}%"
-        params.extend([kw, kw])
+        # Enhanced user search: search by username OR LDAP display name
+        from ldap_service import search_usernames_by_display_name
+        
+        # Get usernames matching display name query
+        ldap_matches = search_usernames_by_display_name(user_kw)
+        
+        if ldap_matches:
+            # Search by: (username LIKE query) OR (username IN ldap_matches)
+            placeholders = ", ".join(["%s"] * len(ldap_matches))
+            sql += f" AND (user_name LIKE %s OR login_name LIKE %s OR user_name IN ({placeholders}) OR login_name IN ({placeholders}))"
+            kw = f"%{user_kw}%"
+            params.extend([kw, kw] + list(ldap_matches) + list(ldap_matches))
+        else:
+            # No LDAP matches, just use keyword search
+            sql += " AND (user_name LIKE %s OR login_name LIKE %s)"
+            kw = f"%{user_kw}%"
+            params.extend([kw, kw])
         
     if mode_kw:
         sql += " AND mode LIKE %s"
@@ -1369,6 +1383,7 @@ def aggregate_usage_by_categories(
             key,
             {
                 "name": display_name,
+                "username": entry.get("user_key") or "",  # Add username field
                 "totals": {cat: 0 for cat in active_categories},
                 "total": 0,
             },
