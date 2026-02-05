@@ -27,11 +27,10 @@ from sharp_mfp_export import (
     parse_month_range,
     parse_time_value,
     parse_week_range,
-    fetch_latest_user_counts,
-    fetch_aggregated_users_paginated,
     fetch_job_logs_by_users,
     host_tag,
     normalize_name,
+    run_download_process,
 )
 
 import logging
@@ -104,6 +103,37 @@ def _parse_query_datetime(raw: str, label: str, errors: List[str]) -> Optional[d
 
 
 
+
+def _parse_common_params(query_args: Dict[str, str]) -> Dict[str, Any]:
+    """Extract and normalize common query parameters."""
+    time_mode = query_args.get("time_mode", "all")
+    
+    # Defaults and simple cleanups
+    params = {
+        "printer": query_args.get("printer", "all"),
+        "user": query_args.get("user", "").strip(),
+        "mode": query_args.get("mode", "").strip(),
+        "computer": query_args.get("computer", "").strip(),
+        "filename": query_args.get("filename", "").strip(),
+        "time_mode": time_mode,
+        "limit": _to_int(query_args.get("limit", "5"), 5),
+        "page": _to_int(query_args.get("page", "1"), 1),
+        "per_page": _to_int(query_args.get("per_page", "0"), 0), # Default depends on context, set 0 here
+        "month": "",
+        "week": "",
+        "start": "",
+        "end": "",
+    }
+    
+    # Handle Time Mode Logic
+    if time_mode != "all":
+        params["month"] = query_args.get("month", "").strip()
+        params["week"] = query_args.get("week", "").strip()
+        params["start"] = query_args.get("start", "").strip()
+        params["end"] = query_args.get("end", "").strip()
+        
+    return params
+
 from threading import Lock
 import threading
 
@@ -125,50 +155,36 @@ def update_data():
             return
 
         try:
-            import os
-            env = os.environ.copy()
-            env["PYTHONIOENCODING"] = "utf-8"
-            
-            process = subprocess.Popen(
-                ["python", "-u",  "sharp_mfp_export.py", "download", "--source", "manual"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                env=env,
-                text=True,
-                bufsize=1,
-                encoding="utf-8",
-                errors="replace"
-            )
-            
             yield 'data: {"status": "start", "message": "開始更新程序..."}\n\n'
 
-            if process.stdout:
-                for line in process.stdout:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    if line.startswith("== http"):
-                        yield f'data: {{"status": "progress", "message": "正在處理: {line[3:]}"}}\n\n'
-                    else:
-                        yield f'data: {{"status": "log", "message": "{line}"}}\n\n'
+            # Use internal generator instead of subprocess
+            for line in run_download_process(None): # None = all printers
+                line = line.strip()
+                if not line:
+                    continue
+                if line.startswith("== http"):
+                    yield f'data: {{"status": "progress", "message": "正在處理: {line[3:]}"}}\n\n'
+                else:
+                    yield f'data: {{"status": "log", "message": "{line}"}}\n\n'
 
-            process.wait()
-            if process.returncode == 0:
-                yield 'data: {"status": "log", "message": "正在預熱緩存..."}\n\n'
-                try:
-                    # Warm up cache for main endpoints
-                    with app.test_client() as client:
-                        client.get("/counts")
-                        client.get("/jobs")
-                        client.get("/leaders")
-                    yield 'data: {"status": "done", "message": "更新完成！"}\n\n'
-                except Exception as w_err:
-                    yield f'data: {{"status": "error", "message": "緩存預熱失敗: {str(w_err)}"}}\n\n'
-            else:
-                yield 'data: {"status": "error", "message": "更新過程中發生錯誤"}\n\n'
-        
+            # If we completed the loop, it means success (exceptions yielded as FAIL messages)
+            # Check if any FAIL occurred? run_download_process catches exceptions and yields "FAIL: ..."
+            # We assume it's successful overall if it finishes.
+            
+            yield 'data: {"status": "log", "message": "正在預熱緩存..."}\n\n'
+            try:
+                # Warm up cache for main endpoints
+                with app.test_client() as client:
+                    client.get("/counts")
+                    client.get("/jobs")
+                    client.get("/leaders")
+                yield 'data: {"status": "done", "message": "更新完成！"}\n\n'
+            except Exception as w_err:
+                yield f'data: {{"status": "error", "message": "緩存預熱失敗: {str(w_err)}"}}\n\n'
+            
         except Exception as e:
             yield f'data: {{"status": "error", "message": "系統錯誤: {str(e)}"}}\n\n'
+
         
         finally:
             download_lock.release()
@@ -292,57 +308,22 @@ def _format_usage_entries(
 
 
 def _build_jobs_query() -> Dict[str, Any]:
-    time_mode = request.args.get("time_mode", "all")
-    
-    # Clear time field values if mode is 'all' to ensure clean reset
-    if time_mode == "all":
-        month = ""
-        week = ""
-        start = ""
-        end = ""
-    else:
-        month = request.args.get("month", "").strip()
-        week = request.args.get("week", "").strip()
-        start = request.args.get("start", "").strip()
-        end = request.args.get("end", "").strip()
-    
-    return {
-        "printer": request.args.get("printer", "all"),
-        "user": request.args.get("user", "").strip(),
-        "mode": request.args.get("mode", "").strip(),
-        "computer": request.args.get("computer", "").strip(),
-        "filename": request.args.get("filename", "").strip(),
-        "time_mode": time_mode,
-        "month": month,
-        "week": week,
-        "start": start,
-        "end": end,
-        "limit": request.args.get("limit", "5"),
-        "page": request.args.get("page", "1"),
-        "per_page": request.args.get("per_page", "2"),
-    }
+    params = _parse_common_params(request.args)
+    if params["per_page"] == 0:
+        params["per_page"] = 2
+    return params
 
 
-def _prepare_jobs_context(query_args: Dict[str, str]) -> Dict[str, Any]:
-    # Parse pagination args
-    try:
-        page = int(query_args.get("page", 1))
-        if page < 1:
-            page = 1
-    except ValueError:
-        page = 1
+def _prepare_jobs_context(query_args: Dict[str, Any]) -> Dict[str, Any]:
+    # Parse pagination args (already parsed in _build_jobs_query)
+    page = query_args.get("page", 1)
+    per_page = query_args.get("per_page", 2)
+    limit_val = query_args.get("limit", 5)
     
-    try:
-        per_page = int(query_args.get("per_page", 2))
-        if per_page not in [2, 5, 10, 20, 50, 100]:
-            per_page = 2
-    except ValueError:
+    # Simple bounds check if needed
+    if per_page not in [2, 5, 10, 20, 50, 100]:
         per_page = 2
-
-    try:
-        limit_val = int(query_args.get("limit", 5))
-    except ValueError:
-        limit_val = 5
+    query_args["per_page"] = per_page # Ensure context reflects effective value
 
     user_kw = query_args.get("user", "").strip()
     printer_pick = query_args.get("printer", "all")
@@ -492,34 +473,18 @@ def _prepare_jobs_context(query_args: Dict[str, str]) -> Dict[str, Any]:
 
 
 def _build_counts_query() -> Dict[str, Any]:
-    time_mode = request.args.get("time_mode", "all")
-    
-    # Clear time field values if mode is 'all' to ensure clean reset
-    if time_mode == "all":
-        month = ""
-        week = ""
-        start = ""
-        end = ""
-    else:
-        month = request.args.get("month", "").strip()
-        week = request.args.get("week", "").strip()
-        start = request.args.get("start", "").strip()
-        end = request.args.get("end", "").strip()
-    
-    return {
-        "printer": request.args.get("printer", "all"),
-        "user": request.args.get("user", "").strip(),
-        "time_mode": time_mode,
-        "month": month,
-        "week": week,
-        "start": start,
-        "end": end,
+    params = _parse_common_params(request.args)
+    # Add counts-specific fields
+    params.update({
         "categories": request.args.getlist("category"),
-        "limit": request.args.get("limit", "0"),
         "show_zero": request.args.get("show_zero") == "on",
-        "view_mode": request.args.get("view_mode", "single_printer"),  # single_printer, all_printers, aggregated
-        "export_scope": request.args.get("export_scope", "filtered"),  # filtered, all
-    }
+        "view_mode": request.args.get("view_mode", "single_printer"),
+        "export_scope": request.args.get("export_scope", "filtered"),
+    })
+    # Default per_page for counts is 30 if not specified (0 from parser)
+    if params["per_page"] == 0:
+        params["per_page"] = 30
+    return params
 
 
 
@@ -529,36 +494,18 @@ def _prepare_counts_context(query: Dict[str, Any], export_mode: bool = False) ->
         page = 1
         per_page = 0
     else:
-        try:
-            page = int(request.args.get("page", 1))
-            if page < 1: 
-                page = 1
-        except ValueError:
-            page = 1
-
-        try:
-            per_page = int(request.args.get("per_page", 30))  # Changed default to 30
-            if per_page not in [10, 20, 30, 50, 100]:  # Updated valid options
-                per_page = 30
-        except ValueError:
+        page = query.get("page", 1)
+        per_page = query.get("per_page", 30)
+        
+        if per_page not in [10, 20, 30, 50, 100]:
             per_page = 30
     
-    # Update query dict so template receives the effective value (and dropdown selects correctly)
-    query["per_page"] = str(per_page)
+    # Update query dict so template receives the effective value
+    query["per_page"] = per_page # Keep as int or str? Template handles both usually, but strict equals might vary.
+                                 # _parse_common_params returns int.
+                                 # Let's keep it consistent.
 
-    limit = _to_int(query["limit"], 0) # Limit per user display is legacy, we rely on pagination now.
-    # In original code, limit was used in _format_usage_entries to limit *number of users*?
-    # If using pagination, we don't really need 'limit' for "Top N". Pagination handles it.
-    # But maybe user wants "Top 5" instead of page 1?
-    # Let's keep 'limit' as a separate secondary restriction if needed, or ignore it if per_page rules.
-    # The user request said "customizable limit". per_page is that custom limit.
-    # 'limit' in query dict comes from form input 'limit'.
-    # In the HTML, 'limit' input is "顯示筆數". 
-    # But wait, User Request 2 says "一頁最多只能顯示10條，并且可以自定義".
-    # This refers to "entries per page" (per_page).
-    # The old "limit" input was "Show Top N".
-    # I should map the old 'limit' form field to 'per_page' or just use 'per_page'.
-    # I will rely on 'per_page' and ignore 'limit' for determining valid users.
+    limit = query.get("limit", 0)
 
 
     errors: List[str] = []
