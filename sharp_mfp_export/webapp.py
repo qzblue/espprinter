@@ -33,6 +33,9 @@ from sharp_mfp_export import (
     host_tag,
     normalize_name,
     run_download_process,
+    fetch_total_user_printer_pairs,
+    log_update_event,
+    fetch_total_jobs_count,
 )
 
 import logging
@@ -156,7 +159,10 @@ def update_data():
             yield 'data: {"status": "error", "message": "已有更新正在進行中，請稍後再試。"}\n\n'
             return
 
+        # Init Log
+        log_id = 0
         try:
+            log_id = log_update_event("web_manual", "running", "開始更新程序 (Web)", 0)
             yield 'data: {"status": "start", "message": "開始更新程序..."}\n\n'
 
             # Use internal generator instead of subprocess
@@ -170,8 +176,6 @@ def update_data():
                     yield f'data: {{"status": "log", "message": "{line}"}}\n\n'
 
             # If we completed the loop, it means success (exceptions yielded as FAIL messages)
-            # Check if any FAIL occurred? run_download_process catches exceptions and yields "FAIL: ..."
-            # We assume it's successful overall if it finishes.
             
             yield 'data: {"status": "log", "message": "正在預熱緩存..."}\n\n'
             try:
@@ -180,12 +184,19 @@ def update_data():
                     client.get("/counts")
                     client.get("/jobs")
                     client.get("/leaders")
+                
+                log_update_event("web_manual", "success", "更新完成 (Web)", log_id)
                 yield 'data: {"status": "done", "message": "更新完成！"}\n\n'
             except Exception as w_err:
-                yield f'data: {{"status": "error", "message": "緩存預熱失敗: {str(w_err)}"}}\n\n'
+                err_msg = f"緩存預熱失敗: {str(w_err)}"
+                log_update_event("web_manual", "warning", err_msg, log_id)
+                yield f'data: {{"status": "error", "message": "{err_msg}"}}\n\n'
             
         except Exception as e:
-            yield f'data: {{"status": "error", "message": "系統錯誤: {str(e)}"}}\n\n'
+            err_msg = f"系統錯誤: {str(e)}"
+            if log_id > 0:
+                log_update_event("web_manual", "error", err_msg, log_id)
+            yield f'data: {{"status": "error", "message": "{err_msg}"}}\n\n'
 
         
         finally:
@@ -312,19 +323,19 @@ def _format_usage_entries(
 def _build_jobs_query() -> Dict[str, Any]:
     params = _parse_common_params(request.args)
     if params["per_page"] == 0:
-        params["per_page"] = 2
+        params["per_page"] = 3
     return params
 
 
 def _prepare_jobs_context(query_args: Dict[str, Any]) -> Dict[str, Any]:
     # Parse pagination args (already parsed in _build_jobs_query)
     page = query_args.get("page", 1)
-    per_page = query_args.get("per_page", 2)
+    per_page = query_args.get("per_page", 3)
     limit_val = query_args.get("limit", 5)
     
-    # Simple bounds check if needed
-    if per_page not in [2, 5, 10, 20, 50, 100]:
-        per_page = 2
+    # Simple bounds check
+    if per_page < 1:
+        per_page = 3
     query_args["per_page"] = per_page # Ensure context reflects effective value
 
     user_kw = query_args.get("user", "").strip()
@@ -453,6 +464,17 @@ def _prepare_jobs_context(query_args: Dict[str, Any]) -> Dict[str, Any]:
     import math
     total_pages_count = math.ceil(total_users / per_page) if per_page > 0 else 0
 
+    # Calculate global total jobs count for display
+    total_jobs_count = fetch_total_jobs_count(
+        printer_addr=printer_pick,
+        user_kw=user_kw,
+        mode_kw=mode_pick,
+        computer_kw=computer_pick,
+        start_dt=start_dt,
+        end_dt=end_dt,
+        filename_kw=filename_pick
+    )
+
     return {
         "query": query_args,
         "errors": [],
@@ -462,6 +484,7 @@ def _prepare_jobs_context(query_args: Dict[str, Any]) -> Dict[str, Any]:
             "page": page,
             "per_page": per_page,
             "total_users": total_users,
+            "total_jobs": total_jobs_count,
             "total_pages": total_pages_count,
             "has_prev": page > 1,
             "has_next": page < total_pages_count,
@@ -483,9 +506,9 @@ def _build_counts_query() -> Dict[str, Any]:
         "view_mode": request.args.get("view_mode", "single_printer"),
         "export_scope": request.args.get("export_scope", "filtered"),
     })
-    # Default per_page for counts is 30 if not specified (0 from parser)
+    # Default per_page for counts is 20 if not specified (0 from parser)
     if params["per_page"] == 0:
-        params["per_page"] = 30
+        params["per_page"] = 20
     return params
 
 
@@ -497,10 +520,10 @@ def _prepare_counts_context(query: Dict[str, Any], export_mode: bool = False) ->
         per_page = 0
     else:
         page = query.get("page", 1)
-        per_page = query.get("per_page", 30)
+        per_page = query.get("per_page", 20)
         
         if per_page not in [10, 20, 30, 50, 100]:
-            per_page = 30
+            per_page = 20
     
     # Update query dict so template receives the effective value
     query["per_page"] = per_page # Keep as int or str? Template handles both usually, but strict equals might vary.
@@ -589,6 +612,16 @@ def _prepare_counts_context(query: Dict[str, Any], export_mode: bool = False) ->
         )
         
         if all_users:
+            # Calculate total records (user-printer pairs) for display
+            total_records = fetch_total_user_printer_pairs(
+                printer_addr="all",
+                user_kw=user_kw,
+                mode_kw=None,
+                computer_kw=None,
+                start_dt=start_dt,
+                end_dt=end_dt
+            )
+            
             # Fetch detailed logs for these users across all printers
             all_detailed = fetch_job_logs_by_users(
                 all_users,
@@ -675,6 +708,7 @@ def _prepare_counts_context(query: Dict[str, Any], export_mode: bool = False) ->
             "page": page,
             "per_page": per_page,
             "total_users": total_users,
+            "total_records": total_records if view_mode == "all_printers" and locals().get("total_records") else 0,
             "total_pages": total_pages_count,
             "has_prev": page > 1,
             "has_next": page < total_pages_count,
@@ -695,16 +729,14 @@ def _build_leaders_query() -> Dict[str, Any]:
         "week": request.args.get("week", "").strip(),
         "start": request.args.get("start", "").strip(),
         "end": request.args.get("end", "").strip(),
-        "limit": request.args.get("limit", "10"),
-        "summary_limit": request.args.get("summary_limit", "20"),
         "page": request.args.get("page", "1"),
         "per_page": request.args.get("per_page", "20"),
+        "view_mode": request.args.get("view_mode", "all_printers"),
     }
 
 
 def _prepare_leaders_context(query: Dict[str, Any]) -> Dict[str, Any]:
-    limit = _to_int(query["limit"], 10)
-    summary_limit = _to_int(query["summary_limit"], 20)
+    view_mode = query.get("view_mode", "all_printers")
     
     # Pagination for aggregated list
     page = _to_int(query["page"], 1)
@@ -716,75 +748,108 @@ def _prepare_leaders_context(query: Dict[str, Any]) -> Dict[str, Any]:
     start_dt, end_dt = _resolve_time_range_from_query(
         query["time_mode"], query["month"], query["week"], query["start"], query["end"], errors
     )
-    printers = _selected_printers(query["printer"])
+    
     user_kw = query["user"] or None
     mode_kw = query["mode"] or None
     computer_kw = query["computer"] or None
+    
+    # Determine which printers to fetch based on view mode
+    if view_mode == "single_printer":
+        # Single printer view: use selected printer (or first if "all")
+        selected_printer = query["printer"]
+        if selected_printer == "all" or not selected_printer:
+            printers = [PRINTERS[0]] if PRINTERS else []
+        else:
+            printers = [selected_printer]
+    else:
+        # all_printers or aggregated: fetch all printers
+        printers = _selected_printers("all")
 
     reports, _ = _collect_job_reports(printers, user_kw, mode_kw, computer_kw, start_dt, end_dt)
 
-    results: List[Dict[str, Any]] = []
-    for printer in printers:
-        label = _printer_label(printer)
-        report = reports.get(printer)
-        if not report:
-            results.append({"printer": printer, "label": label, "error": "找不到 joblog 匯出檔，請先下載。"})
-            continue
-        top_users = report["top_users"]
-        if limit > 0:
-            top_users = top_users[:limit]
-        results.append(
-            {
-                "printer": printer,
-                "label": label,
-                "file_name": report["file_path"].name,
-                "totals": report["totals"],
-                "top_users": top_users,
-            }
-        )
+    # Collect all rows based on view mode
+    all_rows = []
+    show_printer_column = False
+    
+    if view_mode == "aggregated":
+        # Aggregated Mode: Group by User
+        if reports:
+            summary = aggregate_joblog_reports(list(reports.values()))
+            if summary:
+                # summary["users"] is already sorted by pages desc in aggregate_joblog_reports (but we ensure it)
+                all_rows = sorted(summary["users"], key=lambda u: u["pages"], reverse=True)
+                # Aggregated rows structure: {user, login, jobs, bw, color, pages}
+    else:
+        # Detail Mode: All Printers or Single Printer
+        # Flatten all top_users from all reports into a single list
+        for printer in printers:
+            report = reports.get(printer)
+            if not report:
+                continue
+                
+            label = _printer_label(printer)
+            for user_entry in report["top_users"]:
+                # Create a copy to enrich with printer data
+                row = user_entry.copy()
+                row["printer"] = printer
+                row["printer_label"] = label
+                all_rows.append(row)
+        
+        # Sort globally by pages descending
+        all_rows.sort(key=lambda u: u["pages"], reverse=True)
+        
+        # Show printer column only in "all_printers" mode
+        if view_mode == "all_printers":
+            show_printer_column = True
 
-    # Pagination logic specifically for the aggregated list
-    pagination = None
-    if reports:
-        summary = aggregate_joblog_reports(list(reports.values()))
-        if summary:
-            users = summary["users"]
-            total_users = len(users)
-            
-            # Use pagination params instead of summary_limit if page > 1 or per_page != default
-            # But keep summary_limit compatibility if page is unused?
-            # Actually, let's just use pagination for the aggregated view.
-            
-            start_idx = (page - 1) * per_page
-            end_idx = start_idx + per_page
-            
-            display_users = users[start_idx:end_idx]
-            
-            aggregated = {"totals": summary["totals"], "users": display_users}
-            
-            import math
-            total_pages_count = math.ceil(total_users / per_page) if per_page > 0 else 0
-            
-            pagination = {
-                "page": page,
-                "per_page": per_page,
-                "total_users": total_users,
-                "total_pages": total_pages_count,
-                "has_prev": page > 1,
-                "prev_num": page - 1,
-                "has_next": page < total_pages_count,
-                "next_num": page + 1
-            }
-
-    all_results = {
-        "results": results, 
-        "errors": errors, 
-        "aggregated": aggregated, 
-        "reports": list(reports.values()),
-        "pagination": pagination
+    # Global Pagination
+    total_users = len(all_rows)
+    # Calculate unique users count for "all_printers" view where one user may appear multiple times
+    total_unique_users = len(set((r.get('user') or '').lower() + (r.get('login') or '').lower() for r in all_rows))
+    
+    import math
+    total_pages_count = math.ceil(total_users / per_page) if per_page > 0 else 0
+    
+    start_idx = (page - 1) * per_page
+    end_idx = start_idx + per_page
+    display_rows = all_rows[start_idx:end_idx]
+    
+    pagination = {
+        "page": page,
+        "per_page": per_page,
+        "total_users": total_users,
+        "total_unique_users": total_unique_users,
+        "total_pages": total_pages_count,
+        "has_prev": page > 1,
+        "prev_num": page - 1,
+        "has_next": page < total_pages_count,
+        "next_num": page + 1
     }
 
-    return all_results
+    # Calculate Totals for the current selection (all fetched reports)
+    # Note: For aggregated, summary["totals"] exists. For detail, we sum up reports.
+    grand_totals = {"jobs": 0, "bw": 0, "color": 0, "pages": 0}
+    if view_mode == "aggregated" and reports:
+        # Use existing summary totals if available
+        # Need to re-fetch summary or calculating it? We calculated it above.
+        # Ideally we refactor code to keep summary variable accessible.
+        pass # We'll calculate manually below to be safe and consistent
+        
+    for r in reports.values():
+        t = r["totals"]
+        grand_totals["jobs"] += t["jobs"]
+        grand_totals["bw"] += t["bw"]
+        grand_totals["color"] += t["color"]
+        grand_totals["pages"] += t["pages"]
+
+    return {
+        "rows": display_rows,
+        "show_printer_column": show_printer_column,
+        "totals": grand_totals,
+        "errors": errors,
+        "pagination": pagination,
+        "view_mode": view_mode
+    }
 
 
 def _workbook_response(wb: Workbook, filename: str):
@@ -899,37 +964,31 @@ def _build_all_printers_workbook(entries: List[Dict[str, Any]], categories: List
 
 
 
-def _build_leaders_workbook(results: List[Dict[str, Any]], aggregated: Optional[Dict[str, Any]]) -> Workbook:
+def _build_leaders_workbook(rows: List[Dict[str, Any]], show_printer_column: bool) -> Workbook:
     wb = Workbook()
-    first_sheet = True
-    for block in results:
-        title = _printer_label(block["printer"])[:31]
-        ws = wb.active if first_sheet else wb.create_sheet(title)
-        ws.title = title
-        first_sheet = False
-        ws.append(["用戶", "登入名稱", "筆數", "黑白張數", "彩色張數", "總張數"])
-        for item in block.get("top_users", []):
-            ws.append([
-                item["user"],
-                item["login"],
-                item["jobs"],
-                item["bw"],
-                item["color"],
-                item["pages"],
-            ])
+    ws = wb.active
+    ws.title = "排行榜"
+    
+    headers = ["用戶", "登入名稱", "筆數", "黑白張數", "彩色張數", "總張數"]
+    if show_printer_column:
+        headers.append("列印機")
+        
+    ws.append(headers)
+    
+    for item in rows:
+        row_data = [
+            item["user"],
+            item["login"],
+            item["jobs"],
+            item["bw"],
+            item["color"],
+            item["pages"],
+        ]
+        if show_printer_column:
+            row_data.append(item.get("printer_label", ""))
+            
+        ws.append(row_data)
 
-    if aggregated:
-        ws = wb.create_sheet("跨機器彙總")
-        ws.append(["用戶", "登入名稱", "筆數", "黑白張數", "彩色張數", "總張數"])
-        for item in aggregated.get("users", []):
-            ws.append([
-                item["user"],
-                item["login"],
-                item["jobs"],
-                item["bw"],
-                item["color"],
-                item["pages"],
-            ])
     return wb
 
 
@@ -1024,19 +1083,59 @@ def leaders():
         "leaders.html",
         printer_choices=PRINTER_CHOICES,
         query=query,
-        results=context["results"],
+        rows=context["rows"],
+        show_printer_column=context["show_printer_column"],
+        totals=context["totals"],
         errors=context["errors"],
-        aggregated=context["aggregated"],
         query_string=query_string,
         pagination=context.get("pagination"),
+        view_mode=context.get("view_mode", "all_printers"),
     )
+
+
+def _build_user_jobs_workbook(user_blocks: List[Dict[str, Any]]) -> Workbook:
+    """
+    Build workbook for jobs page export (user-grouped data).
+    Each user_block has: name, login, totals, entries
+    """
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "作業紀錄"
+    
+    # Header row
+    ws.append(["用戶名稱", "登入名稱", "工作ID", "開始時間", "模式", "電腦名稱", "列印機", "黑白張數", "彩色張數", "總張數", "檔案名稱"])
+    
+    for block in user_blocks:
+        user_name = block.get("name", "未知")
+        login_name = block.get("login", "N/A")
+        
+        for entry in block.get("entries", []):
+            ws.append([
+                user_name,
+                login_name,
+                entry.get("job_id") or entry.get("account_job_id") or "?",
+                format_dt(entry.get("start")),
+                entry.get("mode") or "N/A",
+                entry.get("computer") or "N/A",
+                _printer_label(entry.get("printer", "")),
+                entry.get("bw", 0),
+                entry.get("color", 0),
+                entry.get("pages", 0),
+                entry.get("file_name") or ""
+            ])
+    
+    return wb
 
 
 @app.route("/export/jobs")
 def export_jobs():
     query = _build_jobs_query()
     context = _prepare_jobs_context(query)
-    wb = _build_jobs_workbook(context["reports"])
+    
+    # Get user blocks from context
+    user_blocks = context.get("results", [])
+    
+    wb = _build_user_jobs_workbook(user_blocks)
     return _workbook_response(wb, "jobs_export.xlsx")
 
 
@@ -1117,12 +1216,34 @@ def export_stats_combined():
 
 @app.route("/export/leaders")
 def export_leaders():
+    export_range = request.args.get("export_range", "current_filter")
+    
     query = _build_leaders_query()
-    query["limit"] = "0"
-    query["summary_limit"] = "0"
+    # Use large per_page to ensure all rows are returned (no pagination for export)
+    query["per_page"] = "1000000"
+    query["page"] = "1"
+    
+    # If exporting all data, clear all filters
+    if export_range == "all_data":
+        query["user"] = ""
+        query["mode"] = ""
+        query["computer"] = ""
+        query["time_mode"] = "all"
+        query["month"] = ""
+        query["week"] = ""
+        query["start"] = ""
+        query["end"] = ""
+    
     context = _prepare_leaders_context(query)
-    wb = _build_leaders_workbook(context["results"], context["aggregated"])
-    return _workbook_response(wb, "leaders_export.xlsx")
+    wb = _build_leaders_workbook(context["rows"], context["show_printer_column"])
+    
+    # Add descriptive filename
+    if export_range == "all_data":
+        filename = "leaders_all_data.xlsx"
+    else:
+        filename = "leaders_filtered.xlsx"
+    
+    return _workbook_response(wb, filename)
 
 
 

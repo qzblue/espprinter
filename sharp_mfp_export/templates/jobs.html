@@ -63,14 +63,7 @@
     </label>
     <label>
       <span>每頁顯示用戶數</span>
-      <select name="per_page">
-        <option value="2" {% if query.per_page=="2" %}selected{% endif %}>2</option>
-        <option value="5" {% if query.per_page=="5" %}selected{% endif %}>5</option>
-        <option value="10" {% if query.per_page=="10" %}selected{% endif %}>10</option>
-        <option value="20" {% if query.per_page=="20" %}selected{% endif %}>20</option>
-        <option value="50" {% if query.per_page=="50" %}selected{% endif %}>50</option>
-        <option value="100" {% if query.per_page=="100" %}selected{% endif %}>100</option>
-      </select>
+      <input type="number" name="per_page" value="{{ query.per_page }}" min="1" max="500" />
     </label>
     <label>
       <span>每位用戶顯示筆數</span>
@@ -157,7 +150,13 @@
   <button class="btn" disabled style="background: #ccc; cursor: not-allowed">上一頁</button>
   {% endif %}
 
-  <span>第 {{ pagination.page }} 頁 / 共 {{ pagination.total_pages }} 頁 ({{ pagination.total_users }} 位用戶)</span>
+  <span style="color: #666; font-size: 0.9rem;">第 {{ pagination.page }} / {{ pagination.total_pages }} 頁
+    {% if pagination.total_jobs %}
+    ({{ pagination.total_jobs }} 筆工作 / {{ pagination.total_users }} 位用戶)
+    {% else %}
+    ({{ pagination.total_users }} 位用戶)
+    {% endif %}
+  </span>
 
   {% if pagination.has_next %}
   <a class="btn"

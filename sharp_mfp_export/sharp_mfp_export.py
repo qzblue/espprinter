@@ -58,20 +58,7 @@ def get_db_connection():
     return pymysql.connect(**DB_CONFIG)
 
 
-def log_update(success: bool, message: str) -> None:
-    """Log the update result to the database."""
-    status = "success" if success else "failed"
-    try:
-        conn = get_db_connection()
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "INSERT INTO update_logs (trigger_source, status, message) VALUES (%s, %s, %s)",
-                ("manual", status, message)
-            )
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"Failed to write to update_logs: {e}")
+
 
 def init_db():
     conn = get_db_connection()
@@ -494,6 +481,62 @@ def fetch_aggregated_users_paginated(
         conn.close()
 
 
+def fetch_total_user_printer_pairs(
+    printer_addr: Optional[str] = None,
+    user_kw: Optional[str] = None,
+    mode_kw: Optional[str] = None,
+    computer_kw: Optional[str] = None,
+    start_dt: Optional[datetime] = None,
+    end_dt: Optional[datetime] = None,
+    filename_kw: Optional[str] = None
+) -> int:
+    """
+    Count total unique (user, login, printer) tuples.
+    This corresponds to the total number of rows in 'All Printers' Counts view 
+    (where one user can appear multiple times if they use multiple printers).
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            where_sql, params = _build_job_logs_where_clause(
+                printer_addr, user_kw, mode_kw, computer_kw, start_dt, end_dt, filename_kw
+            )
+            
+            # Count distinct (user, login, printer)
+            # MySQL supports COUNT(DISTINCT expr1, expr2, ...)
+            sql = f"SELECT COUNT(DISTINCT user_name, login_name, printer_addr) as cnt FROM job_logs {where_sql}"
+            cursor.execute(sql, params)
+            return cursor.fetchone()['cnt']
+    finally:
+        conn.close()
+
+
+def fetch_total_jobs_count(
+    printer_addr: Optional[str] = None,
+    user_kw: Optional[str] = None,
+    mode_kw: Optional[str] = None,
+    computer_kw: Optional[str] = None,
+    start_dt: Optional[datetime] = None,
+    end_dt: Optional[datetime] = None,
+    filename_kw: Optional[str] = None
+) -> int:
+    """
+    Count total job logs matching the filter.
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cursor:
+            where_sql, params = _build_job_logs_where_clause(
+                printer_addr, user_kw, mode_kw, computer_kw, start_dt, end_dt, filename_kw
+            )
+            
+            sql = f"SELECT COUNT(*) as cnt FROM job_logs {where_sql}"
+            cursor.execute(sql, params)
+            return cursor.fetchone()['cnt']
+    finally:
+        conn.close()
+
+
 def fetch_job_logs_by_users(
     users: List[Dict[str, str]],
     printer_addr: Optional[str] = None,
@@ -756,15 +799,7 @@ def resolve_printers(spec: Optional[str]) -> List[str]:
     return printers or PRINTERS
 
 
-def latest_export_file(kind: str, printer: str) -> Optional[Path]:
-    directory = OUT_DIR / ("usercount" if kind == "usercount" else "joblog")
-    if not directory.exists():
-        return None
-    tag = host_tag(printer)
-    prefix = "uc" if kind == "usercount" else "joblog"
-    pattern = f"{prefix}_{tag}_*.csv"
-    matches = sorted(directory.glob(pattern))
-    return matches[-1] if matches else None
+
 
 
 
@@ -963,7 +998,7 @@ def cleanup_old_exports() -> None:
                     except OSError as e:
                         print(f"  [ERR] {f.name}: {e}")
 
-def run_download_process(printers: Optional[List[str]] = None):
+def run_download_process(printers: Optional[List[str]] = None, trigger_source: str = "manual"):
     # Ensure DB table exists
     init_db()
 
@@ -1010,10 +1045,11 @@ def run_download_process(printers: Optional[List[str]] = None):
     # Log overall result
     if errors:
         msg = "部分更新失敗: " + "; ".join(errors)
-        log_update(False, msg)
+        # log_update(False, msg, trigger_source) -> Handled by caller (cmd_download or webapp)
         yield f"LOG: {msg}"
     else:
-        log_update(True, "手動更新成功")
+        # success_msg = "自動更新成功" if trigger_source == "auto" else "手動更新成功"
+        # log_update(True, success_msg, trigger_source)
         yield "LOG: 更新記錄已寫入資料庫"
         
         # Trigger external warmup if configured (for K8s CronJob)
@@ -1027,8 +1063,8 @@ def run_download_process(printers: Optional[List[str]] = None):
         yield "LOG: 執行緩存預熱 (若有配置)"
 
 
-def download_exports(printers: Optional[List[str]] = None) -> None:
-    for msg in run_download_process(printers):
+def download_exports(printers: Optional[List[str]] = None, trigger_source: str = "manual") -> None:
+    for msg in run_download_process(printers, trigger_source):
         print(msg)
 
 
@@ -1184,58 +1220,7 @@ def collect_usercount_usage(row: Dict[str, str]) -> Dict[str, int]:
     return usage
 
 
-def build_usercount_summary(
-    file_path: Path,
-    user_filter: Optional[str],
-    show_zero: bool,
-) -> List[Dict[str, Any]]:
-    rows = read_csv_rows(file_path)
-    keyword = user_filter.lower() if user_filter else None
-    combined: Dict[str, Dict[str, Any]] = {}
 
-    for row in rows:
-        display_name = normalize_name(row.get("用戶名稱"), "N/A")
-        key = display_name.lower()
-        if keyword and keyword not in display_name.lower():
-            continue
-
-        usage = collect_usercount_usage(row)
-        total = sum(usage.values())
-        if total == 0 and not show_zero:
-            continue
-
-        entry = combined.setdefault(
-            key,
-            {"name": display_name, "total": 0, "usage": defaultdict(int)},
-        )
-        entry["total"] += total
-        for label, pages in usage.items():
-            entry["usage"][label] += pages
-
-    summary: List[Dict[str, Any]] = []
-    for record in combined.values():
-        usage_dict = record["usage"]
-        usage_list = [
-            {"label": label, "pages": pages}
-            for label, pages in sorted(usage_dict.items(), key=lambda item: item[1], reverse=True)
-            if pages > 0
-        ]
-        summary.append({"name": record["name"], "total": record["total"], "usage": dict(usage_dict), "usage_list": usage_list})
-
-    summary.sort(key=lambda item: item["total"], reverse=True)
-    return summary
-
-
-def load_usercount_summary(
-    printer: str,
-    user_filter: Optional[str],
-    show_zero: bool,
-) -> Optional[Dict[str, Any]]:
-    file_path = latest_export_file("usercount", printer)
-    if not file_path:
-        return None
-    items = build_usercount_summary(file_path, user_filter, show_zero)
-    return {"printer": printer, "file_path": file_path, "items": items}
 
 
 def summarize_usercount(
@@ -1297,44 +1282,7 @@ def _joblog_entries_from_csv_raw(path: Path) -> List[Dict[str, Any]]:
         entries.append(entry)
     return entries
 
-def joblog_entries_from_csv(path: Path) -> List[Dict[str, Any]]:
-    return _smart_load(path, _joblog_entries_from_csv_raw, "joblog_parsed")
 
-
-def filter_joblog_entries(
-    entries: List[Dict[str, Any]],
-    user_kw: Optional[str],
-    mode_kw: Optional[str],
-    computer_kw: Optional[str],
-    start_dt: Optional[datetime],
-    end_dt: Optional[datetime],
-) -> List[Dict[str, Any]]:
-    filtered: List[Dict[str, Any]] = []
-    user_kw_lower = user_kw.lower() if user_kw else None
-    mode_kw_lower = mode_kw.lower() if mode_kw else None
-    computer_kw_lower = computer_kw.lower() if computer_kw else None
-
-    for entry in entries:
-        user_name = (entry.get("user") or "").lower()
-        login_name = (entry.get("login") or "").lower()
-        mode_name = (entry.get("mode") or "").lower()
-        computer_name = (entry.get("computer") or "").lower()
-        start = entry.get("start")
-
-        if user_kw_lower and user_kw_lower not in user_name and user_kw_lower not in login_name:
-            continue
-        if mode_kw_lower and mode_kw_lower not in mode_name:
-            continue
-        if computer_kw_lower and computer_kw_lower not in computer_name:
-            continue
-        if start_dt and (not start or start < start_dt):
-            continue
-        if end_dt and (not start or start > end_dt):
-            continue
-
-        filtered.append(entry)
-
-    return filtered
 
 
 def aggregate_joblog_reports(reports: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -1417,20 +1365,7 @@ def _aggregate_entries_to_report(entries: List[Dict[str, Any]]) -> Dict[str, Any
         },
     }
 
-def build_joblog_report(
-    file_path: Path,
-    user_kw: Optional[str],
-    mode_kw: Optional[str],
-    computer_kw: Optional[str],
-    start_dt: Optional[datetime],
-    end_dt: Optional[datetime],
-) -> Dict[str, Any]:
-    # Backward compatibility for CLI or file-based usage
-    entries = joblog_entries_from_csv(file_path)
-    filtered = filter_joblog_entries(entries, user_kw, mode_kw, computer_kw, start_dt, end_dt)
-    report = _aggregate_entries_to_report(filtered)
-    report["file_path"] = file_path
-    return report
+
 
 
 def load_joblog_report(
@@ -1604,7 +1539,7 @@ def cmd_download(args: argparse.Namespace) -> None:
     print(f"DEBUG: cmd_download started with log_id={log_id}")
     
     try:
-        download_exports(resolve_printers(args.printer))
+        download_exports(resolve_printers(args.printer), source)
         print("DEBUG: download_exports finished, updating log...")
         log_update_event(source, "success", "更新成功完成", log_id)
         print("DEBUG: log updated to success")
@@ -1612,17 +1547,6 @@ def cmd_download(args: argparse.Namespace) -> None:
         print(f"DEBUG: download_exports failed: {e}")
         log_update_event(source, "error", f"更新失敗: {str(e)}", log_id)
         raise e
-
-
-def cmd_counts(args: argparse.Namespace) -> None:
-    printers = resolve_printers(args.printer)
-    for base in printers:
-        file_path = latest_export_file("usercount", base)
-        print(f"\n== {base} ==")
-        if not file_path:
-            print("找不到對應的 usercount 檔案，請先執行 download。")
-            continue
-        summarize_usercount(base, file_path, args.user, args.limit, args.show_zero)
 
 
 def cmd_jobs(args: argparse.Namespace) -> None:
@@ -1635,13 +1559,22 @@ def cmd_jobs(args: argparse.Namespace) -> None:
     printers = resolve_printers(args.printer)
     aggregated_sources: List[Dict[str, Any]] = []
     for base in printers:
-        file_path = latest_export_file("joblog", base)
         print(f"\n== {base} ==")
-        if not file_path:
-            print("找不到對應的 joblog 檔案，請先執行 download。")
+        
+        # Use DB-based loader (same as webapp)
+        report = load_joblog_report(
+            base, 
+            args.user, 
+            args.mode, 
+            args.computer, 
+            start_dt, 
+            end_dt
+        )
+        
+        if not report:
+            print("找不到符合條件的紀錄。")
             continue
 
-        report = build_joblog_report(file_path, args.user, args.mode, args.computer, start_dt, end_dt)
         report["printer"] = base
         aggregated_sources.append(report)
         print_joblog_report(report, args.limit, args.top)
@@ -1655,9 +1588,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Sharp MFP 匯出與查詢工具")
     sub = parser.add_subparsers(dest="command")
 
-    download_parser = sub.add_parser("download", help="下載 usercount 與 joblog 匯出檔")
-    download_parser.add_argument("--printer", help="指定列印機 IP (逗號分隔)，預設 all", default="all")
-    download_parser.add_argument("--source", help="觸發來源 (manual/auto)", default="manual")
+    # Download command
+    download_parser = sub.add_parser("download", help="從 Sharp MFP 下載並同步 User Count 和 Job Log 到資料庫")
+    download_parser.add_argument("-p", "--printer", nargs="*", help="指定列印機 IP（空白表示所有列印機）")
+    download_parser.add_argument("--source", choices=["manual", "auto"], default="manual", help="觸發來源（manual=手動, auto=自動排程）")
     download_parser.set_defaults(func=cmd_download)
 
     count_parser = sub.add_parser("counts", help="查詢用戶列印數量 (usercount)")
